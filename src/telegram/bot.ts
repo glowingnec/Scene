@@ -16,6 +16,7 @@ import {
   setRating,
   setSource,
   setLimit,
+  setSpoiler,
   saveSettings,
 } from "../storage/kv";
 import { fetchBooruPosts } from "../services/booru";
@@ -55,7 +56,8 @@ function getSourceName(source: BooruSource): string {
 function getSettingsKeyboard(
   source: BooruSource,
   rating: RatingFilter,
-  limit: number
+  limit: number,
+  spoilerNsfw: boolean = true
 ): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
@@ -69,6 +71,12 @@ function getSettingsKeyboard(
         {
           text: `🔞 Rating: ${getRatingBadgeText(rating)}`,
           callback_data: "toggle_rating",
+        },
+      ],
+      [
+        {
+          text: spoilerNsfw ? "🙈 Spoilers: ON (Blurred)" : "👁️ Spoilers: OFF (Unblurred)",
+          callback_data: "toggle_spoiler",
         },
       ],
       [
@@ -87,14 +95,21 @@ function getSettingsKeyboard(
   };
 }
 
-function formatSettingsPanelText(settings: { source: BooruSource; rating: RatingFilter; limit: number }): string {
+function formatSettingsPanelText(settings: {
+  source: BooruSource;
+  rating: RatingFilter;
+  limit: number;
+  spoilerNsfw?: boolean;
+}): string {
+  const spoilerText = settings.spoilerNsfw !== false ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
   return (
     `⚙️ <b>Bot Settings Panel</b>\n\n` +
     `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
     `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+    `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
     `• <b>Default Everyday Count:</b> <code>${settings.limit} images</code>\n` +
     `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>Tip: Use <code>/limit &lt;1-50&gt;</code> (e.g. <code>/limit 15</code>) to set any exact everyday count.</i>\n\n` +
+    `💡 <i>Tips: Use <code>/limit &lt;1-50&gt;</code> to set count, or <code>/spoiler off</code> to un-spoiler by default.</i>\n\n` +
     `Use the buttons below to customize:`
   );
 }
@@ -106,7 +121,8 @@ export async function sendBooruPostsToChat(
   rating: RatingFilter,
   limit: number = 10,
   workerOrigin?: string,
-  gelbooruAuth?: { userId?: string; apiKey?: string }
+  gelbooruAuth?: { userId?: string; apiKey?: string },
+  spoilerNsfw: boolean = true
 ): Promise<void> {
   const sourceName = getSourceName(source);
   const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
@@ -147,12 +163,14 @@ export async function sendBooruPostsToChat(
         resolvedImageUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
       }
 
+      const shouldSpoiler = spoilerNsfw && post.isNsfw;
+
       return {
         type: "photo",
         media: resolvedImageUrl,
         caption: caption.slice(0, 1024),
         parse_mode: "HTML",
-        has_spoiler: post.isNsfw,
+        has_spoiler: shouldSpoiler,
       };
     });
 
@@ -208,17 +226,23 @@ export async function sendBooruPostsToChat(
 function parseCommandArgs(
   args: string[],
   defaultRating: RatingFilter,
-  defaultLimit: number
-): { rating: RatingFilter; limit: number } {
+  defaultLimit: number,
+  defaultSpoiler: boolean = true
+): { rating: RatingFilter; limit: number; spoilerNsfw: boolean } {
   let rating = defaultRating;
   let limit = defaultLimit;
+  let spoilerNsfw = defaultSpoiler;
 
   for (const arg of args) {
     const lower = arg.toLowerCase();
     if (lower === "nsfw") rating = "nsfw";
     else if (lower === "sfw") rating = "sfw";
     else if (lower === "all" || lower === "both") rating = "all";
-    else {
+    else if (lower === "nospoiler" || lower === "unspoiler" || lower === "unspoiled" || lower === "clean") {
+      spoilerNsfw = false;
+    } else if (lower === "spoiler" || lower === "spoiled" || lower === "blur") {
+      spoilerNsfw = true;
+    } else {
       const num = parseInt(lower, 10);
       if (!isNaN(num) && num > 0 && num <= 50) {
         limit = num;
@@ -226,7 +250,7 @@ function parseCommandArgs(
     }
   }
 
-  return { rating, limit };
+  return { rating, limit, spoilerNsfw };
 }
 
 export async function handleTelegramMessage(
@@ -268,6 +292,8 @@ export async function handleTelegramMessage(
           `• <code>/gel [count] [sfw|nsfw|all]</code> - Gelbooru top images\n` +
           `• <code>/settings</code> - Interactive configuration panel\n` +
           `• <code>/limit &lt;1-50&gt;</code> - Set default everyday image count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/spoiler [on|off]</code> - Toggle NSFW spoiler blur\n` +
+          `• <code>/unspoiler</code> - Unblur images by default\n` +
           `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/sfw</code>, <code>/nsfw</code>, <code>/all</code> - Quick switch rating filter\n` +
           `• <code>/subscribe</code> - Register chat for daily 8:00 AM delivery\n` +
@@ -290,6 +316,8 @@ export async function handleTelegramMessage(
           `<b>Configuration:</b>\n` +
           `• <code>/settings</code> - Interactive control panel\n` +
           `• <code>/limit &lt;1-50&gt;</code> - Set default everyday image count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/spoiler [on|off]</code> - Enable or disable spoiler blur\n` +
+          `• <code>/unspoiler</code> - Turn off spoiler blur by default\n` +
           `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/sfw</code> - Set default rating to SFW (Safe only)\n` +
           `• <code>/nsfw</code> - Set default rating to NSFW (Questionable / Explicit)\n` +
@@ -303,16 +331,34 @@ export async function handleTelegramMessage(
     case "/today":
     case "/top10": {
       const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit, settings.spoilerNsfw !== false);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        settings.source,
+        parsed.rating,
+        parsed.limit,
+        workerOrigin,
+        gelbooruAuth,
+        parsed.spoilerNsfw
+      );
       break;
     }
 
     case "/yan":
     case "/yandere": {
       const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit, settings.spoilerNsfw !== false);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        "yandere",
+        parsed.rating,
+        parsed.limit,
+        workerOrigin,
+        gelbooruAuth,
+        parsed.spoilerNsfw
+      );
       break;
     }
 
@@ -320,8 +366,17 @@ export async function handleTelegramMessage(
     case "/gbr":
     case "/gelbooru": {
       const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "gelbooru", parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit, settings.spoilerNsfw !== false);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        "gelbooru",
+        parsed.rating,
+        parsed.limit,
+        workerOrigin,
+        gelbooruAuth,
+        parsed.spoilerNsfw
+      );
       break;
     }
 
@@ -371,8 +426,41 @@ export async function handleTelegramMessage(
     case "/panel": {
       const settings = await getSettings(env);
       await api.sendMessage(chat.id, formatSettingsPanelText(settings), {
-        reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
+        reply_markup: getSettingsKeyboard(
+          settings.source,
+          settings.rating,
+          settings.limit,
+          settings.spoilerNsfw !== false
+        ),
       });
+      break;
+    }
+
+    case "/spoiler":
+    case "/spoilers": {
+      const arg = (args[0] || "").toLowerCase();
+      let enabled: boolean;
+      if (arg === "on" || arg === "enable" || arg === "1" || arg === "true") {
+        enabled = true;
+      } else if (arg === "off" || arg === "disable" || arg === "0" || arg === "false") {
+        enabled = false;
+      } else {
+        const settings = await getSettings(env);
+        enabled = settings.spoilerNsfw === false ? true : false;
+      }
+      const updated = await setSpoiler(env, enabled);
+      if (updated.spoilerNsfw) {
+        await api.sendMessage(chat.id, "🙈 <b>NSFW Spoilers enabled.</b> NSFW images will have Telegram spoiler blur applied.");
+      } else {
+        await api.sendMessage(chat.id, "👁️ <b>NSFW Spoilers disabled.</b> Images will be un-spoilered (unblurred) by default.");
+      }
+      break;
+    }
+
+    case "/unspoiler":
+    case "/nospoiler": {
+      await setSpoiler(env, false);
+      await api.sendMessage(chat.id, "👁️ <b>NSFW Spoilers disabled.</b> Images will be un-spoilered (unblurred) by default.");
       break;
     }
 
@@ -487,7 +575,12 @@ export async function handleTelegramCallbackQuery(
         msg.message_id,
         formatSettingsPanelText(settings),
         {
-          reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
         }
       );
       break;
@@ -503,7 +596,35 @@ export async function handleTelegramCallbackQuery(
         msg.message_id,
         formatSettingsPanelText(settings),
         {
-          reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
+        }
+      );
+      break;
+    }
+
+    case "toggle_spoiler": {
+      const nextSpoiler = settings.spoilerNsfw === false ? true : false;
+      settings = await setSpoiler(env, nextSpoiler);
+      await api.answerCallbackQuery(
+        callbackQuery.id,
+        `Spoilers: ${nextSpoiler ? "ON (Blurred)" : "OFF (Unblurred)"}`
+      );
+      await api.editMessageText(
+        msg.chat.id,
+        msg.message_id,
+        formatSettingsPanelText(settings),
+        {
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
         }
       );
       break;
@@ -523,7 +644,12 @@ export async function handleTelegramCallbackQuery(
         msg.message_id,
         formatSettingsPanelText(settings),
         {
-          reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
         }
       );
       break;
@@ -538,7 +664,8 @@ export async function handleTelegramCallbackQuery(
         settings.rating,
         settings.limit,
         workerOrigin,
-        gelbooruAuth
+        gelbooruAuth,
+        settings.spoilerNsfw !== false
       );
       break;
     }
@@ -576,7 +703,8 @@ export async function handleScheduledBroadcast(env: Env, workerOrigin?: string):
         settings.rating,
         settings.limit,
         workerOrigin,
-        gelbooruAuth
+        gelbooruAuth,
+        settings.spoilerNsfw !== false
       );
     } catch (err) {
       console.error(`Daily broadcast failed for chat ${chatId}:`, err);

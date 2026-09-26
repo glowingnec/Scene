@@ -15,6 +15,7 @@ const DEFAULT_CONFIG = {
   DEFAULT_SOURCE: "yandere",
   DEFAULT_RATING: "sfw",
   DEFAULT_LIMIT: 10,
+  DEFAULT_SPOILER_NSFW: "true",
   RESTRICT_ALL_TO_OWNER: "false",
 };
 
@@ -36,6 +37,8 @@ async function getSettings(env) {
   const rawRating = (env.DEFAULT_RATING || DEFAULT_CONFIG.DEFAULT_RATING).toLowerCase();
   const defaultRating = rawRating === "all" ? "all" : rawRating === "nsfw" ? "nsfw" : "sfw";
   const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : DEFAULT_CONFIG.DEFAULT_LIMIT;
+  const rawSpoiler = (env.DEFAULT_SPOILER_NSFW || DEFAULT_CONFIG.DEFAULT_SPOILER_NSFW).toLowerCase();
+  const defaultSpoiler = rawSpoiler === "false" ? false : true;
 
   const defaults = {
     source: (env.DEFAULT_SOURCE || DEFAULT_CONFIG.DEFAULT_SOURCE).toLowerCase() === "gelbooru" ? "gelbooru" : "yandere",
@@ -43,6 +46,7 @@ async function getSettings(env) {
     limit: isNaN(defaultLimit) || defaultLimit < 1 || defaultLimit > 50 ? 10 : defaultLimit,
     ownerChatId: env.OWNER_CHAT_ID ? parseInt(env.OWNER_CHAT_ID, 10) : undefined,
     subscribedChatIds: env.OWNER_CHAT_ID ? [parseInt(env.OWNER_CHAT_ID, 10)] : [],
+    spoilerNsfw: defaultSpoiler,
   };
 
   if (env.BOORU_KV) {
@@ -54,6 +58,7 @@ async function getSettings(env) {
           ...stored,
           limit: stored.limit || defaults.limit || 10,
           subscribedChatIds: stored.subscribedChatIds || defaults.subscribedChatIds || [],
+          spoilerNsfw: stored.spoilerNsfw !== undefined ? stored.spoilerNsfw : defaults.spoilerNsfw,
         };
       }
     } catch (err) {
@@ -107,11 +112,12 @@ function getSourceName(source) {
   return source === "gelbooru" ? "Gelbooru" : "yande.re";
 }
 
-function getSettingsKeyboard(source, rating, limit) {
+function getSettingsKeyboard(source, rating, limit, spoilerNsfw = true) {
   return {
     inline_keyboard: [
       [{ text: `📁 Source: ${getSourceName(source)} 🟢`, callback_data: "toggle_source" }],
       [{ text: `🔞 Rating: ${getRatingBadgeText(rating)}`, callback_data: "toggle_rating" }],
+      [{ text: spoilerNsfw ? "🙈 Spoilers: ON (Blurred)" : "👁️ Spoilers: OFF (Unblurred)", callback_data: "toggle_spoiler" }],
       [{ text: `🔢 Default Count: ${limit} images`, callback_data: "cycle_limit" }],
       [{ text: `🚀 Fetch Top ${limit} Now`, callback_data: "fetch_top" }],
     ],
@@ -119,13 +125,15 @@ function getSettingsKeyboard(source, rating, limit) {
 }
 
 function formatSettingsPanelText(settings) {
+  const spoilerText = settings.spoilerNsfw !== false ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
   return (
     `⚙️ <b>Bot Settings Panel</b>\n\n` +
     `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
     `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+    `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
     `• <b>Default Everyday Count:</b> <code>${settings.limit} images</code>\n` +
     `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>Tip: Use <code>/limit &lt;1-50&gt;</code> (e.g. <code>/limit 15</code>) to set any exact everyday count.</i>\n\n` +
+    `💡 <i>Tips: Use <code>/limit &lt;1-50&gt;</code> to set count, or <code>/spoiler off</code> to un-spoiler by default.</i>\n\n` +
     `Use the buttons below to customize:`
   );
 }
@@ -216,7 +224,7 @@ async function fetchYanderePosts(ratingFilter, limit = 10) {
 }
 
 async function fetchGelbooruPosts(ratingFilter, limit = 10, auth) {
-  let tagQuery = "sort:score:desc";
+  let tagQuery = "sort:score:desc -video -webm -animated";
   if (ratingFilter === "sfw") tagQuery += " rating:general";
   else if (ratingFilter === "nsfw") tagQuery += " rating:explicit";
 
@@ -255,6 +263,21 @@ async function fetchGelbooruPosts(ratingFilter, limit = 10, auth) {
 
     if (ratingFilter === "sfw" && isNsfw) continue;
     if (ratingFilter === "nsfw" && !isNsfw) continue;
+
+    // Filter out non-image files (videos, animations, archives)
+    const rawFile = (post.image || post.file_url || "").toLowerCase();
+    const ext = rawFile.split(".").pop()?.split("?")[0] || "";
+    if (
+      ext === "mp4" ||
+      ext === "webm" ||
+      ext === "zip" ||
+      ext === "gif" ||
+      ext === "swf" ||
+      ext === "avi" ||
+      ext === "mkv"
+    ) {
+      continue;
+    }
 
     let imageUrl = post.sample_url || post.file_url || post.preview_url;
     if (!imageUrl) continue;
@@ -359,7 +382,16 @@ class TelegramApi {
   }
 }
 
-async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, workerOrigin, gelbooruAuth) {
+async function sendBooruPostsToChat(
+  api,
+  chatId,
+  source,
+  rating,
+  limit = 10,
+  workerOrigin,
+  gelbooruAuth,
+  spoilerNsfw = true
+) {
   const sourceName = getSourceName(source);
   const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
 
@@ -390,12 +422,14 @@ async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, wor
         resolvedImageUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
       }
 
+      const shouldSpoiler = spoilerNsfw && post.isNsfw;
+
       return {
         type: "photo",
         media: resolvedImageUrl,
         caption: caption.slice(0, 1024),
         parse_mode: "HTML",
-        has_spoiler: post.isNsfw,
+        has_spoiler: shouldSpoiler,
       };
     });
 
@@ -445,23 +479,28 @@ async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, wor
   }
 }
 
-function parseCommandArgs(args, defaultRating, defaultLimit) {
+function parseCommandArgs(args, defaultRating, defaultLimit, defaultSpoiler = true) {
   let rating = defaultRating;
   let limit = defaultLimit;
+  let spoilerNsfw = defaultSpoiler;
 
   for (const arg of args) {
     const lower = arg.toLowerCase();
     if (lower === "nsfw") rating = "nsfw";
     else if (lower === "sfw") rating = "sfw";
     else if (lower === "all" || lower === "both") rating = "all";
-    else {
+    else if (lower === "nospoiler" || lower === "unspoiler" || lower === "clean" || lower === "nospoil") {
+      spoilerNsfw = false;
+    } else if (lower === "spoiler" || lower === "blur") {
+      spoilerNsfw = true;
+    } else {
       const num = parseInt(lower, 10);
       if (!isNaN(num) && num > 0 && num <= 50) {
         limit = num;
       }
     }
   }
-  return { rating, limit };
+  return { rating, limit, spoilerNsfw };
 }
 
 async function handleTelegramMessage(message, env, workerOrigin) {
@@ -499,6 +538,8 @@ async function handleTelegramMessage(message, env, workerOrigin) {
           `• <code>/gel [count] [sfw|nsfw|all]</code> - Gelbooru top images\n` +
           `• <code>/settings</code> - Interactive configuration panel\n` +
           `• <code>/limit &lt;1-50&gt;</code> - Set default everyday image count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/spoiler [on|off]</code> - Toggle NSFW spoiler blur\n` +
+          `• <code>/unspoiler</code> - Unblur images by default\n` +
           `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/sfw</code>, <code>/nsfw</code>, <code>/all</code> - Quick switch rating filter\n` +
           `• <code>/subscribe</code> - Register chat for daily 8:00 AM delivery\n` +
@@ -521,6 +562,8 @@ async function handleTelegramMessage(message, env, workerOrigin) {
           `<b>Configuration:</b>\n` +
           `• <code>/settings</code> - Interactive control panel\n` +
           `• <code>/limit &lt;1-50&gt;</code> - Set default everyday image count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/spoiler [on|off]</code> - Enable or disable spoiler blur\n` +
+          `• <code>/unspoiler</code> - Turn off spoiler blur by default\n` +
           `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/sfw</code> - Set default rating to SFW (Safe only)\n` +
           `• <code>/nsfw</code> - Set default rating to NSFW (Questionable / Explicit)\n` +
@@ -534,16 +577,34 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/today":
     case "/top10": {
       const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit, settings.spoilerNsfw !== false);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        settings.source,
+        parsed.rating,
+        parsed.limit,
+        workerOrigin,
+        gelbooruAuth,
+        parsed.spoilerNsfw
+      );
       break;
     }
 
     case "/yan":
     case "/yandere": {
       const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit, settings.spoilerNsfw !== false);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        "yandere",
+        parsed.rating,
+        parsed.limit,
+        workerOrigin,
+        gelbooruAuth,
+        parsed.spoilerNsfw
+      );
       break;
     }
 
@@ -551,8 +612,17 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/gbr":
     case "/gelbooru": {
       const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "gelbooru", parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit, settings.spoilerNsfw !== false);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        "gelbooru",
+        parsed.rating,
+        parsed.limit,
+        workerOrigin,
+        gelbooruAuth,
+        parsed.spoilerNsfw
+      );
       break;
     }
 
@@ -599,8 +669,44 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/panel": {
       const settings = await getSettings(env);
       await api.sendMessage(chat.id, formatSettingsPanelText(settings), {
-        reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
+        reply_markup: getSettingsKeyboard(
+          settings.source,
+          settings.rating,
+          settings.limit,
+          settings.spoilerNsfw !== false
+        ),
       });
+      break;
+    }
+
+    case "/spoiler":
+    case "/spoilers": {
+      const arg = (args[0] || "").toLowerCase();
+      let enabled;
+      if (arg === "on" || arg === "enable" || arg === "1" || arg === "true") {
+        enabled = true;
+      } else if (arg === "off" || arg === "disable" || arg === "0" || arg === "false") {
+        enabled = false;
+      } else {
+        const settings = await getSettings(env);
+        enabled = settings.spoilerNsfw === false ? true : false;
+      }
+      const current = await getSettings(env);
+      const updated = { ...current, spoilerNsfw: enabled };
+      await saveSettings(env, updated);
+      if (enabled) {
+        await api.sendMessage(chat.id, "🙈 <b>NSFW Spoilers enabled.</b> NSFW images will have Telegram spoiler blur applied.");
+      } else {
+        await api.sendMessage(chat.id, "👁️ <b>NSFW Spoilers disabled.</b> Images will be un-spoilered (unblurred) by default.");
+      }
+      break;
+    }
+
+    case "/unspoiler":
+    case "/nospoiler": {
+      const current = await getSettings(env);
+      await saveSettings(env, { ...current, spoilerNsfw: false });
+      await api.sendMessage(chat.id, "👁️ <b>NSFW Spoilers disabled.</b> Images will be un-spoilered (unblurred) by default.");
       break;
     }
 
@@ -702,7 +808,14 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
         msg.chat.id,
         msg.message_id,
         formatSettingsPanelText(settings),
-        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
+        {
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
+        }
       );
       break;
     }
@@ -716,7 +829,38 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
         msg.chat.id,
         msg.message_id,
         formatSettingsPanelText(settings),
-        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
+        {
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
+        }
+      );
+      break;
+    }
+
+    case "toggle_spoiler": {
+      const nextSpoiler = settings.spoilerNsfw === false ? true : false;
+      settings = { ...settings, spoilerNsfw: nextSpoiler };
+      await saveSettings(env, settings);
+      await api.answerCallbackQuery(
+        callbackQuery.id,
+        `Spoilers: ${nextSpoiler ? "ON (Blurred)" : "OFF (Unblurred)"}`
+      );
+      await api.editMessageText(
+        msg.chat.id,
+        msg.message_id,
+        formatSettingsPanelText(settings),
+        {
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
+        }
       );
       break;
     }
@@ -735,19 +879,72 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
         msg.chat.id,
         msg.message_id,
         formatSettingsPanelText(settings),
-        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
+        {
+          reply_markup: getSettingsKeyboard(
+            settings.source,
+            settings.rating,
+            settings.limit,
+            settings.spoilerNsfw !== false
+          ),
+        }
       );
       break;
     }
 
     case "fetch_top": {
       await api.answerCallbackQuery(callbackQuery.id, `Fetching top ${settings.limit}...`);
-      await sendBooruPostsToChat(api, msg.chat.id, settings.source, settings.rating, settings.limit, workerOrigin, gelbooruAuth);
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        settings.source,
+        settings.rating,
+        settings.limit,
+        workerOrigin,
+        gelbooruAuth,
+        settings.spoilerNsfw !== false
+      );
       break;
     }
 
     default:
       await api.answerCallbackQuery(callbackQuery.id);
+  }
+}
+
+async function handleScheduledBroadcast(env, workerOrigin) {
+  const token = env.TELEGRAM_BOT_TOKEN || globalThis.TELEGRAM_BOT_TOKEN;
+  const api = new TelegramApi(token);
+  const settings = await getSettings(env);
+
+  const gelbooruAuth =
+    env.GELBOORU_USER_ID && env.GELBOORU_API_KEY
+      ? { userId: env.GELBOORU_USER_ID, apiKey: env.GELBOORU_API_KEY }
+      : undefined;
+
+  const targets = new Set();
+  if (settings.ownerChatId) targets.add(settings.ownerChatId);
+  settings.subscribedChatIds.forEach((id) => targets.add(id));
+
+  if (targets.size === 0) {
+    console.warn("No registered chats found for daily broadcast.");
+    return;
+  }
+
+  for (const chatId of targets) {
+    try {
+      await sendBooruPostsToChat(
+        api,
+        chatId,
+        settings.source,
+        settings.rating,
+        settings.limit,
+        workerOrigin,
+        gelbooruAuth,
+        settings.spoilerNsfw !== false
+      );
+    } catch (err) {
+      console.error(`Daily broadcast failed for chat ${chatId}:`, err);
+    }
   }
 }
 

@@ -27,7 +27,7 @@ export async function fetchGelbooruPosts(
   limit: number = 10,
   auth?: { userId?: string; apiKey?: string }
 ): Promise<BooruPost[]> {
-  let tagQuery = "sort:score:desc";
+  let tagQuery = "sort:score:desc -video -webm -animated";
 
   if (ratingFilter === "sfw") {
     tagQuery += " rating:general";
@@ -80,6 +80,22 @@ export async function fetchGelbooruPosts(
       if (ratingFilter === "sfw" && isNsfw) continue;
       if (ratingFilter === "nsfw" && !isNsfw) continue;
 
+      // Filter out non-image files (videos, animations, archives)
+      const rawFile = (post.image || post.file_url || "").toLowerCase();
+      const ext = rawFile.split(".").pop()?.split("?")[0] || "";
+      if (
+        ext === "mp4" ||
+        ext === "webm" ||
+        ext === "zip" ||
+        ext === "gif" ||
+        ext === "swf" ||
+        ext === "avi" ||
+        ext === "mkv"
+      ) {
+        continue;
+      }
+
+      // Prefer sample URL to avoid huge file sizes that cause Telegram sendMediaGroup failures
       let imageUrl = post.sample_url || post.file_url || post.preview_url;
       if (!imageUrl) continue;
 

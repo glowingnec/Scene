@@ -10,6 +10,8 @@ export function getDefaultSettings(env: Env): BotSettings {
     rawRating === "all" ? "all" : rawRating === "nsfw" ? "nsfw" : "sfw";
   const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : 10;
   const ownerChatId = env.OWNER_CHAT_ID ? parseInt(env.OWNER_CHAT_ID, 10) : undefined;
+  const rawSpoiler = env.DEFAULT_SPOILER_NSFW?.toLowerCase();
+  const defaultSpoiler = rawSpoiler === "false" ? false : true;
 
   return {
     source: defaultSource,
@@ -17,7 +19,7 @@ export function getDefaultSettings(env: Env): BotSettings {
     limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 50 ? 10 : defaultLimit,
     ownerChatId: isNaN(ownerChatId as number) ? undefined : ownerChatId,
     subscribedChatIds: ownerChatId && !isNaN(ownerChatId) ? [ownerChatId] : [],
-    spoilerNsfw: true,
+    spoilerNsfw: defaultSpoiler,
   };
 }
 
@@ -35,6 +37,7 @@ export async function getSettings(env: Env): Promise<BotSettings> {
           ...stored,
           limit: stored.limit || defaults.limit || 10,
           subscribedChatIds: stored.subscribedChatIds || defaults.subscribedChatIds || [],
+          spoilerNsfw: stored.spoilerNsfw !== undefined ? stored.spoilerNsfw : defaults.spoilerNsfw,
         };
       }
     } catch (err) {
@@ -91,6 +94,13 @@ export async function setLimit(env: Env, limit: number): Promise<BotSettings> {
   const current = await getSettings(env);
   const clamped = Math.max(1, Math.min(50, limit));
   const updated: BotSettings = { ...current, limit: clamped };
+  await saveSettings(env, updated);
+  return updated;
+}
+
+export async function setSpoiler(env: Env, enabled: boolean): Promise<BotSettings> {
+  const current = await getSettings(env);
+  const updated: BotSettings = { ...current, spoilerNsfw: enabled };
   await saveSettings(env, updated);
   return updated;
 }

@@ -29,10 +29,12 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers top ani
 | Command | Description |
 | :--- | :--- |
 | `/start` | Welcome and quick start guide |
-| `/yan [count] [sfw\|nsfw\|all]` | Pull top yande.re images (e.g. `/yan`, `/yan 15`, `/yan 20 all`) |
-| `/gel [count] [sfw\|nsfw\|all]` | Pull top Gelbooru images (e.g. `/gel`, `/gel 15`, `/gel 20 nsfw`) |
-| `/today [count] [sfw\|nsfw\|all]` | Pull top images of the day using current settings |
-| `/settings` | Open interactive settings panel |
+| `/yan [count] [sfw\|nsfw\|all] [spoiler\|nospoiler]` | Pull top yande.re images (e.g. `/yan`, `/yan 15`, `/yan 20 all nospoiler`) |
+| `/gel [count] [sfw\|nsfw\|all] [spoiler\|nospoiler]` | Pull top Gelbooru images (e.g. `/gel`, `/gel 15`, `/gel 20 nsfw nospoiler`) |
+| `/today [count] [sfw\|nsfw\|all] [spoiler\|nospoiler]` | Pull top images of the day using current settings |
+| `/settings` | Open interactive settings panel (toggle source, rating, spoiler blur, count) |
+| `/spoiler [on\|off]` | Toggle NSFW spoiler blur on or off |
+| `/unspoiler` | Turn off NSFW spoiler blur by default (unblur images) |
 | `/limit <1-50>` | Set default everyday image count (e.g. `/limit 15`) |
 | `/source <yandere\|gelbooru>` | Switch default source |
 | `/sfw` | Set default rating to SFW (Safe only) |
