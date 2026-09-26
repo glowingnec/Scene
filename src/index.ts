@@ -28,16 +28,18 @@ export default {
       );
     }
 
+    const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;
+
     // Helper endpoint to register webhook automatically: GET /setup-webhook
     if (request.method === "GET" && url.pathname === "/setup-webhook") {
-      if (!env.TELEGRAM_BOT_TOKEN) {
+      if (!token) {
         return new Response("Error: TELEGRAM_BOT_TOKEN environment secret is not set.", {
           status: 500,
         });
       }
 
       const webhookUrl = `${url.origin}/webhook`;
-      const api = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
+      const api = new TelegramApi(token);
       const res = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
 
       return new Response(
@@ -91,11 +93,12 @@ export default {
    * Cron Scheduled Trigger Handler (Runs every day)
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    if (!env.TELEGRAM_BOT_TOKEN) {
+    const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;
+    if (!token) {
       console.error("TELEGRAM_BOT_TOKEN not configured in scheduled cron execution.");
       return;
     }
 
-    ctx.waitUntil(handleScheduledBroadcast(env));
+    ctx.waitUntil(handleScheduledBroadcast({ ...env, TELEGRAM_BOT_TOKEN: token }));
   },
 };
