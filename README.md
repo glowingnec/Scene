@@ -27,16 +27,17 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers the **t
 | Command | Audience | Description |
 | :--- | :--- | :--- |
 | `/start` | Everyone | Welcomes user, detects owner `@cheytac29`, registers chat for daily delivery. |
-| `/dbr [count] [sfw\|nsfw\|all]` | Everyone | Pulls top Danbooru images (e.g. `/dbr`, `/dbr 5`, `/dbr all`). |
 | `/yan [count] [sfw\|nsfw\|all]` | Everyone | Pulls top yande.re images (e.g. `/yan`, `/yan 5`, `/yan all`). |
+| `/gel [count] [sfw\|nsfw\|all]` | Everyone | Pulls top Gelbooru images (e.g. `/gel`, `/gel 5`, `/gel nsfw`). |
 | `/today [count] [sfw\|nsfw\|all]` | Everyone | Pulls top images of the day using current settings. |
 | `/settings` | **Owner Only** | Opens the interactive settings control panel. |
 | `/sfw` | **Owner Only** | Switches default rating filter to SFW. |
 | `/nsfw` | **Owner Only** | Switches default rating filter to NSFW. |
 | `/all` or `/both` | **Owner Only** | Switches default rating to BOTH (SFW + NSFW). |
 | `/limit <1-10>` | **Owner Only** | Sets default number of images to display (e.g. `/limit 5`). |
-| `/source <danbooru\|yandere>` | **Owner Only** | Switches default daily source. |
-| `/subscribe` | **Owner Only** | Subscribes the current chat to daily 8:00 AM UTC+7 deliveries. |
+| `/source <yandere\|gelbooru>` | **Owner Only** | Switches default daily source. |
+| `/test_gel` | Everyone | Diagnostic test for Gelbooru API connection. |
+| `/subscribe` | **Owner Only** | Subscribes current chat to daily 8:00 AM UTC+7 deliveries. |
 | `/unsubscribe` | **Owner Only** | Unsubscribes from daily deliveries. |
 | `/help` | Everyone | Shows the command list and instructions. |
 

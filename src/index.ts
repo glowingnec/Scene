@@ -28,7 +28,7 @@ export default {
       );
     }
 
-    // High-performance image proxy to bypass Danbooru hotlink protection for Telegram
+    // High-performance image proxy to ensure reliable media delivery to Telegram
     if (request.method === "GET" && url.pathname === "/proxy") {
       const targetUrl = url.searchParams.get("url");
       if (!targetUrl) return new Response("Missing url parameter", { status: 400 });
@@ -36,15 +36,11 @@ export default {
       try {
         const parsed = new URL(targetUrl);
         const host = parsed.hostname.toLowerCase();
-        if (
-          !host.endsWith("donmai.us") &&
-          !host.endsWith("yande.re")
-        ) {
+        if (!host.endsWith("yande.re") && !host.endsWith("gelbooru.com")) {
           return new Response("Forbidden host", { status: 403 });
         }
 
-        const isDanbooru = host.includes("donmai.us");
-        const referer = isDanbooru ? "https://danbooru.donmai.us/" : "https://yande.re/";
+        const referer = host.includes("gelbooru.com") ? "https://gelbooru.com/" : "https://yande.re/";
 
         const imgRes = await fetch(targetUrl, {
           headers: {

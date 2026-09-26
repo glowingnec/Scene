@@ -1,15 +1,15 @@
 import { BooruPost, BooruSource, RatingFilter } from "../types";
-import { fetchDanbooruPosts } from "./danbooru";
 import { fetchYanderePosts } from "./yandere";
+import { fetchGelbooruPosts } from "./gelbooru";
 
 export async function fetchBooruPosts(
   source: BooruSource,
   rating: RatingFilter,
   limit: number = 10,
-  danbooruAuth?: { login?: string; apiKey?: string }
+  gelbooruAuth?: { userId?: string; apiKey?: string }
 ): Promise<BooruPost[]> {
-  if (source === "danbooru") {
-    return await fetchDanbooruPosts(rating, limit, danbooruAuth);
+  if (source === "gelbooru") {
+    return await fetchGelbooruPosts(rating, limit, gelbooruAuth);
   } else {
     return await fetchYanderePosts(rating, limit);
   }

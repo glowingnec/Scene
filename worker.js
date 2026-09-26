@@ -2,33 +2,31 @@
  * Booru Today Telegram Bot - Standalone Single-File Worker
  *
  * Supported:
- * - Danbooru & yande.re top images
+ * - yande.re & Gelbooru top anime art
  * - Rating toggles: SFW, NSFW, and BOTH (SFW+NSFW)
- * - Configurable image count: 1-10 (e.g. /limit 5 or /dbr 5)
- * - Shortened commands: /dbr and /yan
- * - Built-in image proxy to bypass Danbooru hotlink blocks
+ * - Configurable image count: 1-10 (e.g. /limit 5 or /yan 5)
+ * - Shortened commands: /yan (yande.re) and /gel (Gelbooru)
  * - Owner recognition for @cheytac29
  * - Daily cron scheduled broadcast at 8:00 AM UTC+7 (01:00 UTC)
  */
 
 const DEFAULT_CONFIG = {
   OWNER_USERNAME: "cheytac29",
-  DEFAULT_SOURCE: "danbooru",
+  DEFAULT_SOURCE: "yandere",
   DEFAULT_RATING: "sfw",
   DEFAULT_LIMIT: 10,
   RESTRICT_ALL_TO_OWNER: "false",
-};
-
-const DANBOORU_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept": "application/json, text/plain, */*",
-  "Referer": "https://danbooru.donmai.us/",
 };
 
 const YANDERE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Accept": "application/json, text/plain, */*",
   "Referer": "https://yande.re/",
+};
+
+const GELBOORU_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
 };
 
 const SETTINGS_KEY = "booru_bot_settings";
@@ -40,7 +38,7 @@ async function getSettings(env) {
   const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : DEFAULT_CONFIG.DEFAULT_LIMIT;
 
   const defaults = {
-    source: (env.DEFAULT_SOURCE || DEFAULT_CONFIG.DEFAULT_SOURCE).toLowerCase() === "yandere" ? "yandere" : "danbooru",
+    source: (env.DEFAULT_SOURCE || DEFAULT_CONFIG.DEFAULT_SOURCE).toLowerCase() === "gelbooru" ? "gelbooru" : "yandere",
     rating: defaultRating,
     limit: isNaN(defaultLimit) || defaultLimit < 1 || defaultLimit > 10 ? 10 : defaultLimit,
     ownerChatId: env.OWNER_CHAT_ID ? parseInt(env.OWNER_CHAT_ID, 10) : undefined,
@@ -105,130 +103,19 @@ function getRatingBadgeText(rating) {
   return "Both SFW+NSFW 🌈";
 }
 
+function getSourceName(source) {
+  return source === "gelbooru" ? "Gelbooru" : "yande.re";
+}
+
 function getSettingsKeyboard(source, rating, limit) {
   return {
     inline_keyboard: [
-      [{ text: `📁 Source: ${source === "danbooru" ? "Danbooru 🟢" : "yande.re 🟢"}`, callback_data: "toggle_source" }],
+      [{ text: `📁 Source: ${getSourceName(source)} 🟢`, callback_data: "toggle_source" }],
       [{ text: `🔞 Rating: ${getRatingBadgeText(rating)}`, callback_data: "toggle_rating" }],
       [{ text: `🔢 Display Count: ${limit} images`, callback_data: "cycle_limit" }],
       [{ text: `🚀 Fetch Top ${limit} Now`, callback_data: "fetch_top" }],
     ],
   };
-}
-
-async function fetchDanbooruPosts(ratingFilter, limit = 10, auth) {
-  let rawPosts = [];
-  const headers = { ...DANBOORU_HEADERS };
-
-  if (auth && auth.login && auth.apiKey) {
-    headers["Authorization"] = "Basic " + btoa(`${auth.login}:${auth.apiKey}`);
-  }
-
-  let tagQuery = "order:rank";
-  if (ratingFilter === "sfw") tagQuery += " rating:g,s";
-  else if (ratingFilter === "nsfw") tagQuery += " rating:q,e";
-
-  const queryParams = new URLSearchParams({
-    tags: tagQuery,
-    limit: String(Math.max(limit * 3, 30)),
-  });
-
-  if (auth && auth.login && auth.apiKey) {
-    queryParams.set("login", auth.login);
-    queryParams.set("api_key", auth.apiKey);
-  }
-
-  let blockedByCloudflare = false;
-
-  try {
-    const url = `https://danbooru.donmai.us/posts.json?${queryParams.toString()}`;
-    const res = await fetch(url, { headers });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) rawPosts = data;
-    } else {
-      const text = await res.text();
-      if (res.status === 403 || text.includes("Just a moment...")) {
-        blockedByCloudflare = true;
-      }
-    }
-  } catch (err) {
-    console.warn("Danbooru rank query error:", err);
-  }
-
-  if (rawPosts.length === 0 && !blockedByCloudflare) {
-    try {
-      const popularUrl = "https://danbooru.donmai.us/explore/posts/popular.json?scale=day" + (auth && auth.login ? `&login=${auth.login}&api_key=${auth.apiKey}` : "");
-      const res = await fetch(popularUrl, { headers });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) rawPosts = data;
-      } else {
-        const text = await res.text();
-        if (res.status === 403 || text.includes("Just a moment...")) {
-          blockedByCloudflare = true;
-        }
-      }
-    } catch (err) {
-      console.warn("Danbooru popular fallback error:", err);
-    }
-  }
-
-  if (blockedByCloudflare && rawPosts.length === 0) {
-    throw new Error(
-      "Danbooru requires your free API key to pass Cloudflare. Please set DANBOORU_LOGIN & DANBOORU_API_KEY in Cloudflare Settings."
-    );
-  }
-
-  if (rawPosts.length === 0) {
-    try {
-      const res = await fetch("https://danbooru.donmai.us/posts.json?tags=order:score&limit=40", { headers: DANBOORU_HEADERS });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) rawPosts = data;
-      }
-    } catch (err) {
-      console.error("Danbooru score fallback error:", err);
-    }
-  }
-
-  const validPosts = [];
-  for (const post of rawPosts) {
-    if (post.is_banned || post.is_deleted) continue;
-    const rating = (post.rating || "q").toLowerCase();
-    const isNsfw = rating === "e" || rating === "q";
-
-    if (ratingFilter === "sfw" && isNsfw) continue;
-    if (ratingFilter === "nsfw" && !isNsfw) continue;
-
-    let imageUrl = post.large_file_url || post.file_url;
-    if (!imageUrl && post.media_asset && post.media_asset.variants) {
-      const preferred = post.media_asset.variants.find((v) => v.type === "sample" || v.type === "720p" || v.type === "1080p");
-      imageUrl = preferred ? preferred.url : post.media_asset.variants[0]?.url;
-    }
-
-    if (!imageUrl) continue;
-    if (imageUrl.startsWith("/")) imageUrl = `https://danbooru.donmai.us${imageUrl}`;
-
-    const ext = (post.file_ext || "").toLowerCase();
-    if (ext === "mp4" || ext === "webm" || ext === "zip") continue;
-
-    validPosts.push({
-      id: post.id,
-      source: "danbooru",
-      imageUrl,
-      postUrl: `https://danbooru.donmai.us/posts/${post.id}`,
-      rating,
-      isNsfw,
-      tags: (post.tag_string || "").split(" ").slice(0, 15),
-      artist: post.tag_string_artist?.replace(/ /g, ", "),
-      score: post.score || post.fav_count || 0,
-    });
-
-    if (validPosts.length >= limit) break;
-  }
-
-  return validPosts;
 }
 
 async function fetchYanderePosts(ratingFilter, limit = 10) {
@@ -316,6 +203,68 @@ async function fetchYanderePosts(ratingFilter, limit = 10) {
   return validPosts;
 }
 
+async function fetchGelbooruPosts(ratingFilter, limit = 10, auth) {
+  let tagQuery = "sort:score:desc";
+  if (ratingFilter === "sfw") tagQuery += " rating:general";
+  else if (ratingFilter === "nsfw") tagQuery += " rating:explicit";
+
+  const queryParams = new URLSearchParams({
+    page: "dapi",
+    s: "post",
+    q: "index",
+    json: "1",
+    tags: tagQuery,
+    limit: String(Math.max(limit * 3, 30)),
+  });
+
+  if (auth && auth.userId && auth.apiKey) {
+    queryParams.set("user_id", auth.userId);
+    queryParams.set("api_key", auth.apiKey);
+  }
+
+  const url = `https://gelbooru.com/index.php?${queryParams.toString()}`;
+  const res = await fetch(url, { headers: GELBOORU_HEADERS });
+  if (!res.ok) {
+    if (res.status === 401) {
+      throw new Error("Gelbooru requires API access credentials. Please set GELBOORU_USER_ID and GELBOORU_API_KEY in Cloudflare.");
+    }
+    throw new Error(`Gelbooru HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  let rawPosts = [];
+  if (Array.isArray(data)) rawPosts = data;
+  else if (data && Array.isArray(data.post)) rawPosts = data.post;
+
+  const validPosts = [];
+  for (const post of rawPosts) {
+    const rating = (post.rating || "q").toLowerCase();
+    const isNsfw = rating === "explicit" || rating === "questionable" || rating === "e" || rating === "q";
+
+    if (ratingFilter === "sfw" && isNsfw) continue;
+    if (ratingFilter === "nsfw" && !isNsfw) continue;
+
+    let imageUrl = post.sample_url || post.file_url || post.preview_url;
+    if (!imageUrl) continue;
+    if (imageUrl.startsWith("//")) imageUrl = `https:${imageUrl}`;
+
+    validPosts.push({
+      id: post.id,
+      source: "gelbooru",
+      imageUrl,
+      postUrl: `https://gelbooru.com/index.php?page=post&s=view&id=${post.id}`,
+      rating,
+      isNsfw,
+      tags: (post.tags || "").split(" ").slice(0, 15),
+      artist: post.owner,
+      score: post.score || 0,
+    });
+
+    if (validPosts.length >= limit) break;
+  }
+  return validPosts;
+}
+
 class TelegramApi {
   constructor(token) {
     this.baseUrl = `https://api.telegram.org/bot${token}`;
@@ -398,14 +347,14 @@ class TelegramApi {
   }
 }
 
-async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, workerOrigin, danbooruAuth) {
-  const sourceName = source === "danbooru" ? "Danbooru" : "yande.re";
+async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, workerOrigin, gelbooruAuth) {
+  const sourceName = getSourceName(source);
   const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
 
   await api.sendMessage(chatId, `⏳ <i>Fetching top ${limit} images from <b>${sourceName}</b> [${ratingLabel}]...</i>`);
 
   try {
-    const posts = source === "danbooru" ? await fetchDanbooruPosts(rating, limit, danbooruAuth) : await fetchYanderePosts(rating, limit);
+    const posts = source === "gelbooru" ? await fetchGelbooruPosts(rating, limit, gelbooruAuth) : await fetchYanderePosts(rating, limit);
     if (posts.length === 0) {
       await api.sendMessage(chatId, `⚠️ No images found matching rating <b>${ratingLabel}</b> on ${sourceName} today.`);
       return;
@@ -425,7 +374,7 @@ async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, wor
       caption += `#${idx + 1} <b>Score:</b> ${post.score} (${ratingBadge})${artistStr}\n🔗 <a href="${post.postUrl}">View on ${sourceName}</a>`;
 
       let resolvedImageUrl = post.imageUrl;
-      if (workerOrigin && post.imageUrl.includes("donmai.us")) {
+      if (workerOrigin && post.imageUrl.includes("gelbooru.com")) {
         resolvedImageUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
       }
 
@@ -447,7 +396,7 @@ async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, wor
         const post = posts[i];
         const caption = `#${i + 1} <b>${sourceName}</b> • Score: ${post.score} [${post.rating.toUpperCase()}]\n🔗 <a href="${post.postUrl}">Post Link</a>`;
         let photoUrl = post.imageUrl;
-        if (workerOrigin && post.imageUrl.includes("donmai.us")) {
+        if (workerOrigin && post.imageUrl.includes("gelbooru.com")) {
           photoUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
         }
         const photoRes = await api.sendPhoto(chatId, photoUrl, {
@@ -499,22 +448,19 @@ async function handleTelegramMessage(message, env, workerOrigin) {
   const text = (message.text || "").trim();
   const owner = isOwner(from, env);
 
-  if (owner) {
-    await updateOwnerChatId(env, chat.id);
-  }
-
-  const restrictAll = (env.RESTRICT_ALL_TO_OWNER || DEFAULT_CONFIG.RESTRICT_ALL_TO_OWNER) === "true";
-  if (restrictAll && !owner) {
-    await api.sendMessage(chat.id, "⛔ <b>Access Denied:</b> This bot is exclusively configured for its owner (@cheytac29).");
+  if (!owner) {
+    await api.sendMessage(chat.id, "⛔ <b>Access Denied:</b> This bot is strictly private and exclusively configured for @cheytac29.");
     return;
   }
+
+  await updateOwnerChatId(env, chat.id);
 
   const [command, ...args] = text.split(/\s+/);
   const cmd = command.toLowerCase().replace(/@.+$/, "");
 
-  const danbooruAuth =
-    env.DANBOORU_LOGIN && env.DANBOORU_API_KEY
-      ? { login: env.DANBOORU_LOGIN, apiKey: env.DANBOORU_API_KEY }
+  const gelbooruAuth =
+    env.GELBOORU_USER_ID && env.GELBOORU_API_KEY
+      ? { userId: env.GELBOORU_USER_ID, apiKey: env.GELBOORU_API_KEY }
       : undefined;
 
   switch (cmd) {
@@ -526,18 +472,18 @@ async function handleTelegramMessage(message, env, workerOrigin) {
       await api.sendMessage(
         chat.id,
         `🌸 <b>Booru Today Bot</b>\n\n` +
-          `Daily & on-demand top anime art from Danbooru & yande.re.\n\n` +
+          `Daily & on-demand top anime art from yande.re & Gelbooru.\n\n` +
           `${ownerNotice}\n\n` +
           `<b>Available Commands:</b>\n` +
           `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch today's top images\n` +
-          `• <code>/dbr [count] [sfw|nsfw|all]</code> - Danbooru top images\n` +
           `• <code>/yan [count] [sfw|nsfw|all]</code> - yande.re top images\n` +
+          `• <code>/gel [count] [sfw|nsfw|all]</code> - Gelbooru top images\n` +
           `• <code>/settings</code> - Interactive configuration panel (Owner only)\n` +
           `• <code>/sfw</code> - Safe content only (Owner only)\n` +
           `• <code>/nsfw</code> - Questionable & explicit content (Owner only)\n` +
           `• <code>/all</code> - Both SFW and NSFW content (Owner only)\n` +
           `• <code>/limit &lt;1-10&gt;</code> - Set default image count (Owner only)\n` +
-          `• <code>/source danbooru|yandere</code> - Set default source (Owner only)\n` +
+          `• <code>/source yandere|gelbooru</code> - Set default source (Owner only)\n` +
           `• <code>/help</code> - Show command reference`
       );
       break;
@@ -548,10 +494,10 @@ async function handleTelegramMessage(message, env, workerOrigin) {
         chat.id,
         `📖 <b>Help & Command Reference</b>\n\n` +
           `<b>Quick Fetch Commands:</b>\n` +
-          `• <code>/dbr</code> or <code>/danbooru</code> - Danbooru top images\n` +
-          `  <i>Examples: <code>/dbr</code>, <code>/dbr 5</code>, <code>/dbr 5 nsfw</code>, <code>/dbr all</code></i>\n` +
-          `• <code>/yan</code> or <code>/yandere</code> - yande.re top images\n` +
+          `• <code>/yan</code> or <code>/yandere</code> - Pull yande.re top images\n` +
           `  <i>Examples: <code>/yan</code>, <code>/yan 5</code>, <code>/yan 5 all</code></i>\n` +
+          `• <code>/gel</code> or <code>/gelbooru</code> - Pull Gelbooru top images\n` +
+          `  <i>Examples: <code>/gel</code>, <code>/gel 5</code>, <code>/gel nsfw</code></i>\n` +
           `• <code>/today</code> or <code>/top10</code> - Fetch with current settings\n\n` +
           `<b>Owner Commands (@cheytac29):</b>\n` +
           `• <code>/settings</code> - Interactive settings panel\n` +
@@ -559,7 +505,7 @@ async function handleTelegramMessage(message, env, workerOrigin) {
           `• <code>/nsfw</code> - Questionable / Explicit only\n` +
           `• <code>/all</code> - Both SFW and NSFW\n` +
           `• <code>/limit &lt;1-10&gt;</code> - Set default count (e.g. <code>/limit 5</code>)\n` +
-          `• <code>/source &lt;danbooru|yandere&gt;</code> - Set default source\n` +
+          `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/subscribe</code> - Register for daily 8:00 AM UTC+7 delivery\n` +
           `• <code>/unsubscribe</code> - Cancel daily delivery`
       );
@@ -570,15 +516,7 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/top10": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
-      break;
-    }
-
-    case "/dbr":
-    case "/danbooru": {
-      const settings = await getSettings(env);
-      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "danbooru", parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
+      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
       break;
     }
 
@@ -586,21 +524,66 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/yandere": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
+      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      break;
+    }
+
+    case "/gel":
+    case "/gbr":
+    case "/gelbooru": {
+      const settings = await getSettings(env);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
+      await sendBooruPostsToChat(api, chat.id, "gelbooru", parsed.rating, parsed.limit, workerOrigin, gelbooruAuth);
+      break;
+    }
+
+    case "/test_gel": {
+      const userId = env.GELBOORU_USER_ID;
+      const apiKey = env.GELBOORU_API_KEY;
+      const maskedKey = apiKey ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : "NOT_SET";
+
+      let testUrl = "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit=1";
+      if (userId && apiKey) {
+        testUrl += `&user_id=${encodeURIComponent(userId)}&api_key=${encodeURIComponent(apiKey)}`;
+      }
+
+      await api.sendMessage(chat.id, "🔍 Testing Gelbooru API connection directly...");
+
+      try {
+        const startTime = Date.now();
+        const res = await fetch(testUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+          },
+        });
+        const duration = Date.now() - startTime;
+        const text = await res.text();
+        const snippet = text.slice(0, 350).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+        await api.sendMessage(
+          chat.id,
+          `📊 <b>Gelbooru API Diagnostic Results:</b>\n\n` +
+            `• <b>HTTP Status:</b> <code>${res.status} ${res.statusText}</code>\n` +
+            `• <b>Response Time:</b> <code>${duration}ms</code>\n` +
+            `• <b>GELBOORU_USER_ID:</b> <code>${userId || "NOT_SET"}</code>\n` +
+            `• <b>GELBOORU_API_KEY:</b> <code>${maskedKey}</code>\n\n` +
+            `<b>Response Body Snippet:</b>\n<pre>${snippet}</pre>`
+        );
+      } catch (err) {
+        await api.sendMessage(chat.id, `❌ <b>Fetch Error:</b> <code>${escapeHtml(err.message)}</code>`);
+      }
       break;
     }
 
     case "/settings":
     case "/panel": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can modify settings.");
-        return;
-      }
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can modify settings.");
       const settings = await getSettings(env);
       await api.sendMessage(
         chat.id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
+          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
           `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
           `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
           `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
@@ -651,13 +634,16 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/source": {
       if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can change source.");
       const target = args[0]?.toLowerCase();
-      if (target !== "danbooru" && target !== "yandere" && target !== "dbr" && target !== "yan") {
-        return api.sendMessage(chat.id, "ℹ️ Specify source: <code>/source danbooru</code> or <code>/source yandere</code>");
+      let source = null;
+      if (target === "gelbooru" || target === "gel" || target === "gbr") source = "gelbooru";
+      else if (target === "yandere" || target === "yan") source = "yandere";
+
+      if (!source) {
+        return api.sendMessage(chat.id, "ℹ️ Specify source: <code>/source yandere</code> or <code>/source gelbooru</code>");
       }
-      const source = target === "danbooru" || target === "dbr" ? "danbooru" : "yandere";
       const current = await getSettings(env);
       await saveSettings(env, { ...current, source });
-      await api.sendMessage(chat.id, `📁 <b>Default source updated to:</b> <code>${source}</code>`);
+      await api.sendMessage(chat.id, `📁 <b>Default source updated to:</b> <code>${getSourceName(source)}</code>`);
       break;
     }
 
@@ -694,17 +680,22 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
 
   let settings = await getSettings(env);
 
+  const gelbooruAuth =
+    env.GELBOORU_USER_ID && env.GELBOORU_API_KEY
+      ? { userId: env.GELBOORU_USER_ID, apiKey: env.GELBOORU_API_KEY }
+      : undefined;
+
   switch (callbackQuery.data) {
     case "toggle_source": {
-      const nextSource = settings.source === "danbooru" ? "yandere" : "danbooru";
+      const nextSource = settings.source === "yandere" ? "gelbooru" : "yandere";
       settings = { ...settings, source: nextSource };
       await saveSettings(env, settings);
-      await api.answerCallbackQuery(callbackQuery.id, `Source switched to ${nextSource}`);
+      await api.answerCallbackQuery(callbackQuery.id, `Source switched to ${getSourceName(nextSource)}`);
       await api.editMessageText(
         msg.chat.id,
         msg.message_id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
+          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
           `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
           `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
           `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
@@ -723,7 +714,7 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
         msg.chat.id,
         msg.message_id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
+          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
           `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
           `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
           `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
@@ -742,7 +733,7 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
         msg.chat.id,
         msg.message_id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
+          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
           `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
           `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
           `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
@@ -754,7 +745,7 @@ async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
 
     case "fetch_top": {
       await api.answerCallbackQuery(callbackQuery.id, `Fetching top ${settings.limit}...`);
-      await sendBooruPostsToChat(api, msg.chat.id, settings.source, settings.rating, settings.limit, workerOrigin);
+      await sendBooruPostsToChat(api, msg.chat.id, settings.source, settings.rating, settings.limit, workerOrigin, gelbooruAuth);
       break;
     }
 
@@ -786,16 +777,14 @@ export default {
       try {
         const parsed = new URL(targetUrl);
         const host = parsed.hostname.toLowerCase();
-        if (!host.endsWith("donmai.us") && !host.endsWith("yande.re")) {
+        if (!host.endsWith("yande.re") && !host.endsWith("gelbooru.com")) {
           return new Response("Forbidden host", { status: 403 });
         }
 
-        const isDanbooru = host.includes("donmai.us");
-        const referer = isDanbooru ? "https://danbooru.donmai.us/" : "https://yande.re/";
-
+        const referer = host.includes("gelbooru.com") ? "https://gelbooru.com/" : "https://yande.re/";
         const imgRes = await fetch(targetUrl, {
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": referer,
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
           },

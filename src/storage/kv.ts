@@ -4,7 +4,7 @@ const SETTINGS_KEY = "booru_bot_settings";
 
 export function getDefaultSettings(env: Env): BotSettings {
   const defaultSource: BooruSource =
-    env.DEFAULT_SOURCE?.toLowerCase() === "yandere" ? "yandere" : "danbooru";
+    env.DEFAULT_SOURCE?.toLowerCase() === "gelbooru" ? "gelbooru" : "yandere";
   const rawRating = env.DEFAULT_RATING?.toLowerCase();
   const defaultRating: RatingFilter =
     rawRating === "all" ? "all" : rawRating === "nsfw" ? "nsfw" : "sfw";
