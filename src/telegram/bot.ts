@@ -299,6 +299,60 @@ export async function handleTelegramMessage(
       break;
     }
 
+    case "/test_dbr":
+    case "/debug_dbr": {
+      const login = env.DANBOORU_LOGIN;
+      const apiKey = env.DANBOORU_API_KEY;
+      const maskedKey = apiKey ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : "NOT_SET";
+
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://danbooru.donmai.us/",
+      };
+
+      if (login && apiKey) {
+        headers["Authorization"] = "Basic " + btoa(`${login}:${apiKey}`);
+      }
+
+      const testUrl = login && apiKey
+        ? `https://danbooru.donmai.us/posts.json?tags=order:rank&limit=1&login=${encodeURIComponent(login)}&api_key=${encodeURIComponent(apiKey)}`
+        : "https://danbooru.donmai.us/posts.json?tags=order:rank&limit=1";
+
+      await api.sendMessage(chat.id, "🔍 Testing Danbooru API connection directly...");
+
+      try {
+        const startTime = Date.now();
+        const res = await fetch(testUrl, { headers });
+        const duration = Date.now() - startTime;
+        const text = await res.text();
+        const snippet = text.slice(0, 350).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+        const cfMitigated = res.headers.get("cf-mitigated") || "none";
+        const cfRay = res.headers.get("cf-ray") || "none";
+        const contentType = res.headers.get("content-type") || "unknown";
+
+        await api.sendMessage(
+          chat.id,
+          `📊 <b>Danbooru API Diagnostic Results:</b>\n\n` +
+            `• <b>HTTP Status:</b> <code>${res.status} ${res.statusText}</code>\n` +
+            `• <b>Response Time:</b> <code>${duration}ms</code>\n` +
+            `• <b>Content-Type:</b> <code>${contentType}</code>\n` +
+            `• <b>Cloudflare Mitigated:</b> <code>${cfMitigated}</code>\n` +
+            `• <b>Cloudflare Ray ID:</b> <code>${cfRay}</code>\n` +
+            `• <b>DANBOORU_LOGIN:</b> <code>${login || "NOT_SET"}</code>\n` +
+            `• <b>DANBOORU_API_KEY:</b> <code>${maskedKey}</code>\n\n` +
+            `<b>Response Body Snippet:</b>\n<pre>${snippet}</pre>`
+        );
+      } catch (err: any) {
+        await api.sendMessage(
+          chat.id,
+          `❌ <b>Fetch Error:</b> <code>${escapeHtml(err?.message || "Unknown error")}</code>`
+        );
+      }
+      break;
+    }
+
     case "/dbr":
     case "/danbooru": {
       const settings = await getSettings(env);
