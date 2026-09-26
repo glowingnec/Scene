@@ -1,35 +1,48 @@
 /**
  * Booru Today Telegram Bot - Standalone Single-File Worker
- * Ready for Cloudflare Dashboard Web Editor (Zero Build Step Required)
  *
  * Supported:
- * - Danbooru & yande.re top 10 daily images
- * - SFW & NSFW toggles with native Telegram spoiler blur
+ * - Danbooru & yande.re top images
+ * - Rating toggles: SFW, NSFW, and BOTH (SFW+NSFW)
+ * - Configurable image count: 1-10 (e.g. /limit 5 or /dbr 5)
+ * - Shortened commands: /dbr and /yan
+ * - Built-in image proxy to bypass Danbooru hotlink blocks
  * - Owner recognition for @cheytac29
- * - Daily cron scheduled broadcast & on-demand requests
- * - Interactive inline keyboard settings panel
+ * - Daily cron scheduled broadcast at 8:00 AM UTC+7 (01:00 UTC)
  */
 
-// Default configuration constants (can also be overridden in Cloudflare Dashboard -> Settings -> Variables)
 const DEFAULT_CONFIG = {
   OWNER_USERNAME: "cheytac29",
-  DEFAULT_SOURCE: "danbooru", // "danbooru" or "yandere"
-  DEFAULT_RATING: "sfw",      // "sfw" or "nsfw"
+  DEFAULT_SOURCE: "danbooru",
+  DEFAULT_RATING: "sfw",
+  DEFAULT_LIMIT: 10,
   RESTRICT_ALL_TO_OWNER: "false",
 };
 
-const USER_AGENT = "BooruTodayBot/1.0 (Cloudflare Workers; Telegram Bot by @cheytac29)";
-const SETTINGS_KEY = "booru_bot_settings";
+const DANBOORU_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Referer": "https://danbooru.donmai.us/",
+};
 
+const YANDERE_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Referer": "https://yande.re/",
+};
+
+const SETTINGS_KEY = "booru_bot_settings";
 let inMemorySettings = null;
 
-// ==========================================
-// Storage Helpers (Cloudflare KV or In-Memory)
-// ==========================================
 async function getSettings(env) {
+  const rawRating = (env.DEFAULT_RATING || DEFAULT_CONFIG.DEFAULT_RATING).toLowerCase();
+  const defaultRating = rawRating === "all" ? "all" : rawRating === "nsfw" ? "nsfw" : "sfw";
+  const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : DEFAULT_CONFIG.DEFAULT_LIMIT;
+
   const defaults = {
     source: (env.DEFAULT_SOURCE || DEFAULT_CONFIG.DEFAULT_SOURCE).toLowerCase() === "yandere" ? "yandere" : "danbooru",
-    rating: (env.DEFAULT_RATING || DEFAULT_CONFIG.DEFAULT_RATING).toLowerCase() === "nsfw" ? "nsfw" : "sfw",
+    rating: defaultRating,
+    limit: isNaN(defaultLimit) || defaultLimit < 1 || defaultLimit > 10 ? 10 : defaultLimit,
     ownerChatId: env.OWNER_CHAT_ID ? parseInt(env.OWNER_CHAT_ID, 10) : undefined,
     subscribedChatIds: env.OWNER_CHAT_ID ? [parseInt(env.OWNER_CHAT_ID, 10)] : [],
   };
@@ -41,6 +54,7 @@ async function getSettings(env) {
         return {
           ...defaults,
           ...stored,
+          limit: stored.limit || defaults.limit || 10,
           subscribedChatIds: stored.subscribedChatIds || defaults.subscribedChatIds || [],
         };
       }
@@ -69,109 +83,99 @@ async function updateOwnerChatId(env, chatId) {
     ? current.subscribedChatIds
     : [...current.subscribedChatIds, chatId];
 
-  const updated = {
-    ...current,
-    ownerChatId: chatId,
-    subscribedChatIds: subscribers,
-  };
+  const updated = { ...current, ownerChatId: chatId, subscribedChatIds: subscribers };
   await saveSettings(env, updated);
   return updated;
 }
 
-// ==========================================
-// Authorization & Formatting
-// ==========================================
 function isOwner(from, env) {
   if (!from || !from.username) return false;
-  const owner = (env.OWNER_USERNAME || DEFAULT_CONFIG.OWNER_USERNAME)
-    .replace(/^@/, "")
-    .toLowerCase();
+  const owner = (env.OWNER_USERNAME || DEFAULT_CONFIG.OWNER_USERNAME).replace(/^@/, "").toLowerCase();
   return from.username.toLowerCase() === owner;
 }
 
 function escapeHtml(str) {
   if (!str) return "";
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function getSettingsKeyboard(source, rating) {
+function getRatingBadgeText(rating) {
+  if (rating === "sfw") return "SFW Mode 🛡️";
+  if (rating === "nsfw") return "NSFW Mode ⚠️";
+  return "Both SFW+NSFW 🌈";
+}
+
+function getSettingsKeyboard(source, rating, limit) {
   return {
     inline_keyboard: [
-      [
-        {
-          text: `📁 Source: ${source === "danbooru" ? "Danbooru 🟢" : "yande.re 🟢"}`,
-          callback_data: "toggle_source",
-        },
-      ],
-      [
-        {
-          text: `🔞 Rating: ${rating === "sfw" ? "SFW Mode 🛡️" : "NSFW Mode ⚠️"}`,
-          callback_data: "toggle_rating",
-        },
-      ],
-      [
-        {
-          text: "🚀 Fetch Top 10 Now",
-          callback_data: "fetch_top10",
-        },
-      ],
+      [{ text: `📁 Source: ${source === "danbooru" ? "Danbooru 🟢" : "yande.re 🟢"}`, callback_data: "toggle_source" }],
+      [{ text: `🔞 Rating: ${getRatingBadgeText(rating)}`, callback_data: "toggle_rating" }],
+      [{ text: `🔢 Display Count: ${limit} images`, callback_data: "cycle_limit" }],
+      [{ text: `🚀 Fetch Top ${limit} Now`, callback_data: "fetch_top" }],
     ],
   };
 }
 
-// ==========================================
-// Booru API Clients (Danbooru & yande.re)
-// ==========================================
-async function fetchDanbooruTop10(ratingFilter) {
-  const headers = { "User-Agent": USER_AGENT, "Accept": "application/json" };
+async function fetchDanbooruPosts(ratingFilter, limit = 10) {
   let rawPosts = [];
 
-  // Primary: explore popular posts of the day
   try {
-    const res = await fetch("https://danbooru.donmai.us/explore/posts/popular.json?scale=day", { headers });
+    let tagQuery = "order:rank";
+    if (ratingFilter === "sfw") tagQuery += " rating:g,s";
+    else if (ratingFilter === "nsfw") tagQuery += " rating:q,e";
+
+    const url = `https://danbooru.donmai.us/posts.json?tags=${encodeURIComponent(tagQuery)}&limit=${Math.max(limit * 3, 30)}`;
+    const res = await fetch(url, { headers: DANBOORU_HEADERS });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) rawPosts = data;
     }
   } catch (err) {
-    console.warn("Danbooru popular fetch error:", err);
+    console.warn("Danbooru rank query error:", err);
   }
 
-  // Fallback: search by rank or score
   if (rawPosts.length === 0) {
     try {
-      const ratingTag = ratingFilter === "sfw" ? "rating:g,s" : "";
-      const searchTags = ["order:rank", ratingTag].filter(Boolean).join(" ");
-      const res = await fetch(`https://danbooru.donmai.us/posts.json?tags=${encodeURIComponent(searchTags)}&limit=30`, { headers });
+      const res = await fetch("https://danbooru.donmai.us/explore/posts/popular.json?scale=day", { headers: DANBOORU_HEADERS });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) rawPosts = data;
       }
     } catch (err) {
-      console.error("Danbooru search fallback error:", err);
+      console.warn("Danbooru popular fallback error:", err);
+    }
+  }
+
+  if (rawPosts.length === 0) {
+    try {
+      const res = await fetch("https://danbooru.donmai.us/posts.json?tags=order:score&limit=40", { headers: DANBOORU_HEADERS });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) rawPosts = data;
+      }
+    } catch (err) {
+      console.error("Danbooru score fallback error:", err);
     }
   }
 
   const validPosts = [];
   for (const post of rawPosts) {
     if (post.is_banned || post.is_deleted) continue;
-
     const rating = (post.rating || "q").toLowerCase();
     const isNsfw = rating === "e" || rating === "q";
 
     if (ratingFilter === "sfw" && isNsfw) continue;
+    if (ratingFilter === "nsfw" && !isNsfw) continue;
 
     let imageUrl = post.large_file_url || post.file_url;
     if (!imageUrl && post.media_asset && post.media_asset.variants) {
-      const sampleVariant = post.media_asset.variants.find((v) => v.type === "sample" || v.type === "1080p");
-      imageUrl = sampleVariant ? sampleVariant.url : post.media_asset.variants[0]?.url;
+      const preferred = post.media_asset.variants.find((v) => v.type === "sample" || v.type === "720p" || v.type === "1080p");
+      imageUrl = preferred ? preferred.url : post.media_asset.variants[0]?.url;
     }
 
     if (!imageUrl) continue;
+    if (imageUrl.startsWith("/")) imageUrl = `https://danbooru.donmai.us${imageUrl}`;
+
     const ext = (post.file_ext || "").toLowerCase();
     if (ext === "mp4" || ext === "webm" || ext === "zip") continue;
 
@@ -187,23 +191,21 @@ async function fetchDanbooruTop10(ratingFilter) {
       score: post.score || post.fav_count || 0,
     });
 
-    if (validPosts.length >= 10) break;
+    if (validPosts.length >= limit) break;
   }
 
   return validPosts;
 }
 
-async function fetchYandereTop10(ratingFilter) {
-  const headers = { "User-Agent": USER_AGENT, "Accept": "application/json" };
+async function fetchYanderePosts(ratingFilter, limit = 10) {
   let rawPosts = [];
-
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
   const day = now.getUTCDate();
 
   try {
-    const res = await fetch(`https://yande.re/post/popular_by_day.json?year=${year}&month=${month}&day=${day}`, { headers });
+    const res = await fetch(`https://yande.re/post/popular_by_day.json?year=${year}&month=${month}&day=${day}`, { headers: YANDERE_HEADERS });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) rawPosts = data;
@@ -212,26 +214,27 @@ async function fetchYandereTop10(ratingFilter) {
     console.warn("yande.re popular_by_day error:", err);
   }
 
-  // If start of day, also query yesterday
-  if (rawPosts.length < 5) {
+  if (rawPosts.length < limit) {
     try {
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const res = await fetch(`https://yande.re/post/popular_by_day.json?year=${yesterday.getUTCFullYear()}&month=${yesterday.getUTCMonth() + 1}&day=${yesterday.getUTCDate()}`, { headers });
+      const res = await fetch(`https://yande.re/post/popular_by_day.json?year=${yesterday.getUTCFullYear()}&month=${yesterday.getUTCMonth() + 1}&day=${yesterday.getUTCDate()}`, { headers: YANDERE_HEADERS });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) rawPosts = [...rawPosts, ...data];
       }
     } catch (err) {
-      console.warn("yande.re yesterday popular error:", err);
+      console.warn("yande.re yesterday error:", err);
     }
   }
 
-  // Fallback: search by score
   if (rawPosts.length === 0) {
     try {
-      const ratingTag = ratingFilter === "sfw" ? "rating:s" : "";
+      let ratingTag = "";
+      if (ratingFilter === "sfw") ratingTag = "rating:s";
+      else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
+
       const searchTags = ["order:score", ratingTag].filter(Boolean).join(" ");
-      const res = await fetch(`https://yande.re/post.json?tags=${encodeURIComponent(searchTags)}&limit=30`, { headers });
+      const res = await fetch(`https://yande.re/post.json?tags=${encodeURIComponent(searchTags)}&limit=${Math.max(limit * 3, 30)}`, { headers: YANDERE_HEADERS });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) rawPosts = data;
@@ -249,13 +252,12 @@ async function fetchYandereTop10(ratingFilter) {
     seenIds.add(post.id);
 
     if (post.status === "deleted" || post.is_banned) continue;
-
     const rating = (post.rating || "q").toLowerCase();
     const isNsfw = rating === "e" || rating === "q";
 
     if (ratingFilter === "sfw" && isNsfw) continue;
+    if (ratingFilter === "nsfw" && !isNsfw) continue;
 
-    // Use sample_url or jpeg_url to avoid Telegram 10MB photo URL limit
     const imageUrl = post.sample_url || post.jpeg_url || post.file_url;
     if (!imageUrl) continue;
 
@@ -274,22 +276,12 @@ async function fetchYandereTop10(ratingFilter) {
       score: post.score || 0,
     });
 
-    if (validPosts.length >= 10) break;
+    if (validPosts.length >= limit) break;
   }
 
   return validPosts;
 }
 
-async function fetchTop10Posts(source, rating) {
-  if (source === "danbooru") {
-    return await fetchDanbooruTop10(rating);
-  }
-  return await fetchYandereTop10(rating);
-}
-
-// ==========================================
-// Telegram Bot API Wrapper
-// ==========================================
 class TelegramApi {
   constructor(token) {
     this.baseUrl = `https://api.telegram.org/bot${token}`;
@@ -372,40 +364,40 @@ class TelegramApi {
   }
 }
 
-// ==========================================
-// Command & Message Router
-// ==========================================
-async function sendTop10ToChat(api, chatId, source, rating) {
+async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, workerOrigin) {
   const sourceName = source === "danbooru" ? "Danbooru" : "yande.re";
-  await api.sendMessage(
-    chatId,
-    `⏳ <i>Fetching top 10 images from <b>${sourceName}</b> [${rating.toUpperCase()}]...</i>`
-  );
+  const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
+
+  await api.sendMessage(chatId, `⏳ <i>Fetching top ${limit} images from <b>${sourceName}</b> [${ratingLabel}]...</i>`);
 
   try {
-    const posts = await fetchTop10Posts(source, rating);
+    const posts = source === "danbooru" ? await fetchDanbooruPosts(rating, limit) : await fetchYanderePosts(rating, limit);
     if (posts.length === 0) {
-      await api.sendMessage(
-        chatId,
-        `⚠️ No images found matching rating <b>${rating.toUpperCase()}</b> on ${sourceName} today.`
-      );
+      await api.sendMessage(chatId, `⚠️ No images found matching rating <b>${ratingLabel}</b> on ${sourceName} today.`);
       return;
     }
 
     const todayDate = new Date().toISOString().split("T")[0];
-    const mediaGroup = posts.slice(0, 10).map((post, idx) => {
+    const displayCount = Math.min(posts.length, limit);
+
+    const mediaGroup = posts.slice(0, displayCount).map((post, idx) => {
       const isFirst = idx === 0;
       let caption = "";
       if (isFirst) {
-        caption = `🌟 <b>Top 10 Today • ${sourceName}</b> [${rating.toUpperCase()}]\n📅 ${todayDate}\n\n`;
+        caption = `🌟 <b>Top ${displayCount} Today • ${sourceName}</b> [${ratingLabel}]\n📅 ${todayDate}\n\n`;
       }
       const ratingBadge = post.isNsfw ? "⚠️ NSFW" : "🛡️ SFW";
       const artistStr = post.artist ? ` • 🎨 ${escapeHtml(post.artist)}` : "";
       caption += `#${idx + 1} <b>Score:</b> ${post.score} (${ratingBadge})${artistStr}\n🔗 <a href="${post.postUrl}">View on ${sourceName}</a>`;
 
+      let resolvedImageUrl = post.imageUrl;
+      if (workerOrigin && post.imageUrl.includes("donmai.us")) {
+        resolvedImageUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
+      }
+
       return {
         type: "photo",
-        media: post.imageUrl,
+        media: resolvedImageUrl,
         caption: caption.slice(0, 1024),
         parse_mode: "HTML",
         has_spoiler: post.isNsfw,
@@ -414,14 +406,17 @@ async function sendTop10ToChat(api, chatId, source, rating) {
 
     const sendResult = await api.sendMediaGroup(chatId, mediaGroup);
 
-    // Fallback if media group fails
     if (!sendResult.ok) {
       console.warn("sendMediaGroup failed, using individual sendPhoto fallback:", sendResult.description);
       let successCount = 0;
       for (let i = 0; i < posts.length; i++) {
         const post = posts[i];
         const caption = `#${i + 1} <b>${sourceName}</b> • Score: ${post.score} [${post.rating.toUpperCase()}]\n🔗 <a href="${post.postUrl}">Post Link</a>`;
-        const photoRes = await api.sendPhoto(chatId, post.imageUrl, {
+        let photoUrl = post.imageUrl;
+        if (workerOrigin && post.imageUrl.includes("donmai.us")) {
+          photoUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
+        }
+        const photoRes = await api.sendPhoto(chatId, photoUrl, {
           caption,
           has_spoiler: post.isNsfw,
           parse_mode: "HTML",
@@ -430,27 +425,46 @@ async function sendTop10ToChat(api, chatId, source, rating) {
       }
 
       if (successCount === 0) {
-        let textSummary = `🌟 <b>Top 10 Today • ${sourceName}</b> [${rating.toUpperCase()}]\n📅 ${todayDate}\n\n`;
-        posts.slice(0, 10).forEach((p, i) => {
+        let textSummary = `🌟 <b>Top ${displayCount} Today • ${sourceName}</b> [${ratingLabel}]\n📅 ${todayDate}\n\n`;
+        posts.slice(0, displayCount).forEach((p, i) => {
           textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score} [${p.rating.toUpperCase()}]\n`;
         });
         await api.sendMessage(chatId, textSummary, { disable_web_page_preview: false });
       }
     }
   } catch (err) {
-    console.error("sendTop10ToChat error:", err);
+    console.error("sendBooruPostsToChat error:", err);
     await api.sendMessage(chatId, `❌ Failed to load images: ${escapeHtml(err.message)}`);
   }
 }
 
-async function handleTelegramMessage(message, env) {
-  const api = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
+function parseCommandArgs(args, defaultRating, defaultLimit) {
+  let rating = defaultRating;
+  let limit = defaultLimit;
+
+  for (const arg of args) {
+    const lower = arg.toLowerCase();
+    if (lower === "nsfw") rating = "nsfw";
+    else if (lower === "sfw") rating = "sfw";
+    else if (lower === "all" || lower === "both") rating = "all";
+    else {
+      const num = parseInt(lower, 10);
+      if (!isNaN(num) && num > 0 && num <= 10) {
+        limit = num;
+      }
+    }
+  }
+  return { rating, limit };
+}
+
+async function handleTelegramMessage(message, env, workerOrigin) {
+  const token = env.TELEGRAM_BOT_TOKEN || globalThis.TELEGRAM_BOT_TOKEN;
+  const api = new TelegramApi(token);
   const from = message.from;
   const chat = message.chat;
   const text = (message.text || "").trim();
   const owner = isOwner(from, env);
 
-  // If owner interacts, register chat ID for daily cron
   if (owner) {
     await updateOwnerChatId(env, chat.id);
   }
@@ -467,22 +481,24 @@ async function handleTelegramMessage(message, env) {
   switch (cmd) {
     case "/start": {
       const ownerNotice = owner
-        ? "👑 <b>Owner recognized!</b> Your chat has been registered for daily top 10 deliveries."
+        ? "👑 <b>Owner recognized!</b> Your chat is registered for daily 8:00 AM deliveries."
         : "👋 Welcome! (Bot Owner: @cheytac29)";
 
       await api.sendMessage(
         chat.id,
         `🌸 <b>Booru Today Bot</b>\n\n` +
-          `Daily & on-demand top 10 anime art from Danbooru and yande.re.\n\n` +
+          `Daily & on-demand top anime art from Danbooru & yande.re.\n\n` +
           `${ownerNotice}\n\n` +
           `<b>Available Commands:</b>\n` +
-          `• <code>/today</code> or <code>/top10</code> - Fetch today's top 10 images\n` +
-          `• <code>/danbooru</code> - Fetch top 10 from Danbooru\n` +
-          `• <code>/yandere</code> - Fetch top 10 from yande.re\n` +
-          `• <code>/settings</code> - View & toggle SFW/NSFW & Source (Owner only)\n` +
-          `• <code>/sfw</code> - Switch to SFW mode (Owner only)\n` +
-          `• <code>/nsfw</code> - Switch to NSFW mode (Owner only)\n` +
-          `• <code>/source danbooru|yandere</code> - Switch default source (Owner only)\n` +
+          `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch today's top images\n` +
+          `• <code>/dbr [count] [sfw|nsfw|all]</code> - Danbooru top images\n` +
+          `• <code>/yan [count] [sfw|nsfw|all]</code> - yande.re top images\n` +
+          `• <code>/settings</code> - Interactive configuration panel (Owner only)\n` +
+          `• <code>/sfw</code> - Safe content only (Owner only)\n` +
+          `• <code>/nsfw</code> - Questionable & explicit content (Owner only)\n` +
+          `• <code>/all</code> - Both SFW and NSFW content (Owner only)\n` +
+          `• <code>/limit &lt;1-10&gt;</code> - Set default image count (Owner only)\n` +
+          `• <code>/source danbooru|yandere</code> - Set default source (Owner only)\n` +
           `• <code>/help</code> - Show command reference`
       );
       break;
@@ -492,17 +508,21 @@ async function handleTelegramMessage(message, env) {
       await api.sendMessage(
         chat.id,
         `📖 <b>Help & Command Reference</b>\n\n` +
-          `<b>Public Commands:</b>\n` +
-          `• <code>/today</code> - Pull top 10 using current settings\n` +
-          `• <code>/danbooru</code> - Pull top 10 from Danbooru\n` +
-          `• <code>/yandere</code> - Pull top 10 from yande.re\n\n` +
+          `<b>Quick Fetch Commands:</b>\n` +
+          `• <code>/dbr</code> or <code>/danbooru</code> - Danbooru top images\n` +
+          `  <i>Examples: <code>/dbr</code>, <code>/dbr 5</code>, <code>/dbr 5 nsfw</code>, <code>/dbr all</code></i>\n` +
+          `• <code>/yan</code> or <code>/yandere</code> - yande.re top images\n` +
+          `  <i>Examples: <code>/yan</code>, <code>/yan 5</code>, <code>/yan all</code></i>\n` +
+          `• <code>/today</code> or <code>/top10</code> - Fetch with current settings\n\n` +
           `<b>Owner Commands (@cheytac29):</b>\n` +
-          `• <code>/settings</code> - Interactive configuration panel\n` +
-          `• <code>/sfw</code> - Set SFW filter (Safe / General only)\n` +
-          `• <code>/nsfw</code> - Set NSFW filter (Questionable / Explicit)\n` +
+          `• <code>/settings</code> - Interactive settings panel\n` +
+          `• <code>/sfw</code> - Safe only\n` +
+          `• <code>/nsfw</code> - Questionable / Explicit only\n` +
+          `• <code>/all</code> - Both SFW and NSFW\n` +
+          `• <code>/limit &lt;1-10&gt;</code> - Set default count (e.g. <code>/limit 5</code>)\n` +
           `• <code>/source &lt;danbooru|yandere&gt;</code> - Set default source\n` +
-          `• <code>/subscribe</code> - Register chat for daily cron broadcast\n` +
-          `• <code>/unsubscribe</code> - Stop daily cron broadcast`
+          `• <code>/subscribe</code> - Register for daily 8:00 AM UTC+7 delivery\n` +
+          `• <code>/unsubscribe</code> - Cancel daily delivery`
       );
       break;
     }
@@ -510,21 +530,24 @@ async function handleTelegramMessage(message, env) {
     case "/today":
     case "/top10": {
       const settings = await getSettings(env);
-      await sendTop10ToChat(api, chat.id, settings.source, settings.rating);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
+      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin);
       break;
     }
 
+    case "/dbr":
     case "/danbooru": {
       const settings = await getSettings(env);
-      const ratingOverride = args[0]?.toLowerCase() === "nsfw" ? "nsfw" : args[0]?.toLowerCase() === "sfw" ? "sfw" : settings.rating;
-      await sendTop10ToChat(api, chat.id, "danbooru", ratingOverride);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
+      await sendBooruPostsToChat(api, chat.id, "danbooru", parsed.rating, parsed.limit, workerOrigin);
       break;
     }
 
+    case "/yan":
     case "/yandere": {
       const settings = await getSettings(env);
-      const ratingOverride = args[0]?.toLowerCase() === "nsfw" ? "nsfw" : args[0]?.toLowerCase() === "sfw" ? "sfw" : settings.rating;
-      await sendTop10ToChat(api, chat.id, "yandere", ratingOverride);
+      const parsed = parseCommandArgs(args, settings.rating, settings.limit);
+      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin);
       break;
     }
 
@@ -539,93 +562,96 @@ async function handleTelegramMessage(message, env) {
         chat.id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
           `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${settings.rating.toUpperCase()}</code>\n` +
-          `• <b>Daily Cron Broadcast:</b> <code>Active</code>\n\n` +
-          `Use the buttons below to toggle configuration:`,
-        {
-          reply_markup: getSettingsKeyboard(settings.source, settings.rating),
-        }
+          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
+          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
+          `Use the buttons below to customize:`,
+        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
       );
       break;
     }
 
     case "/sfw": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
-        return;
-      }
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
       const current = await getSettings(env);
       await saveSettings(env, { ...current, rating: "sfw" });
-      await api.sendMessage(chat.id, "🛡️ <b>Rating set to SFW.</b> Safe and general posts will be delivered.");
+      await api.sendMessage(chat.id, "🛡️ <b>Rating set to SFW.</b> Safe & general posts will be delivered.");
       break;
     }
 
     case "/nsfw": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
-        return;
-      }
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
       const current = await getSettings(env);
       await saveSettings(env, { ...current, rating: "nsfw" });
-      await api.sendMessage(chat.id, "⚠️ <b>Rating set to NSFW.</b> Questionable and explicit posts included (with spoiler blur).");
+      await api.sendMessage(chat.id, "⚠️ <b>Rating set to NSFW.</b> Questionable & explicit posts will be delivered.");
+      break;
+    }
+
+    case "/all":
+    case "/both": {
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
+      const current = await getSettings(env);
+      await saveSettings(env, { ...current, rating: "all" });
+      await api.sendMessage(chat.id, "🌈 <b>Rating set to BOTH (SFW + NSFW).</b> All top posts will be delivered.");
+      break;
+    }
+
+    case "/limit":
+    case "/count": {
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can set image limit.");
+      const num = parseInt(args[0], 10);
+      if (isNaN(num) || num < 1 || num > 10) {
+        return api.sendMessage(chat.id, "ℹ️ Please specify a number between 1 and 10. Example: <code>/limit 5</code>");
+      }
+      const current = await getSettings(env);
+      await saveSettings(env, { ...current, limit: num });
+      await api.sendMessage(chat.id, `🔢 <b>Default display count set to:</b> <code>${num} images</code>`);
       break;
     }
 
     case "/source": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can change source.");
-        return;
-      }
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can change source.");
       const target = args[0]?.toLowerCase();
-      if (target !== "danbooru" && target !== "yandere") {
-        await api.sendMessage(chat.id, "ℹ️ Specify source: <code>/source danbooru</code> or <code>/source yandere</code>");
-        return;
+      if (target !== "danbooru" && target !== "yandere" && target !== "dbr" && target !== "yan") {
+        return api.sendMessage(chat.id, "ℹ️ Specify source: <code>/source danbooru</code> or <code>/source yandere</code>");
       }
+      const source = target === "danbooru" || target === "dbr" ? "danbooru" : "yandere";
       const current = await getSettings(env);
-      await saveSettings(env, { ...current, source: target });
-      await api.sendMessage(chat.id, `📁 <b>Default source updated to:</b> <code>${target}</code>`);
+      await saveSettings(env, { ...current, source });
+      await api.sendMessage(chat.id, `📁 <b>Default source updated to:</b> <code>${source}</code>`);
       break;
     }
 
     case "/subscribe": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner can manage subscriptions.");
-        return;
-      }
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner can manage subscriptions.");
       await updateOwnerChatId(env, chat.id);
-      await api.sendMessage(chat.id, "✅ This chat is registered for daily top 10 broadcasts.");
+      await api.sendMessage(chat.id, "✅ This chat is registered for daily 8:00 AM UTC+7 deliveries.");
       break;
     }
 
     case "/unsubscribe": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner can manage subscriptions.");
-        return;
-      }
+      if (!owner) return api.sendMessage(chat.id, "🔒 Only bot owner can manage subscriptions.");
       const current = await getSettings(env);
       const filtered = current.subscribedChatIds.filter((id) => id !== chat.id);
       await saveSettings(env, { ...current, subscribedChatIds: filtered });
-      await api.sendMessage(chat.id, "🔕 This chat unsubscribed from daily broadcasts.");
+      await api.sendMessage(chat.id, "🔕 This chat unsubscribed from daily deliveries.");
       break;
     }
   }
 }
 
-async function handleTelegramCallbackQuery(callbackQuery, env) {
-  const api = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
+async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
+  const token = env.TELEGRAM_BOT_TOKEN || globalThis.TELEGRAM_BOT_TOKEN;
+  const api = new TelegramApi(token);
   const from = callbackQuery.from;
   const owner = isOwner(from, env);
 
   if (!owner) {
-    await api.answerCallbackQuery(callbackQuery.id, "🔒 Action restricted to bot owner (@cheytac29)", true);
-    return;
+    return api.answerCallbackQuery(callbackQuery.id, "🔒 Action restricted to bot owner (@cheytac29)", true);
   }
 
   const msg = callbackQuery.message;
-  if (!msg) {
-    await api.answerCallbackQuery(callbackQuery.id);
-    return;
-  }
+  if (!msg) return api.answerCallbackQuery(callbackQuery.id);
 
   let settings = await getSettings(env);
 
@@ -640,35 +666,56 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
         msg.message_id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
           `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${settings.rating.toUpperCase()}</code>\n` +
-          `• <b>Daily Cron Broadcast:</b> <code>Active</code>\n\n` +
-          `Use the buttons below to toggle configuration:`,
-        { reply_markup: getSettingsKeyboard(settings.source, settings.rating) }
+          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
+          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
+          `Use the buttons below to customize:`,
+        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
       );
       break;
     }
 
     case "toggle_rating": {
-      const nextRating = settings.rating === "sfw" ? "nsfw" : "sfw";
+      const nextRating = settings.rating === "sfw" ? "nsfw" : settings.rating === "nsfw" ? "all" : "sfw";
       settings = { ...settings, rating: nextRating };
       await saveSettings(env, settings);
-      await api.answerCallbackQuery(callbackQuery.id, `Rating switched to ${nextRating.toUpperCase()}`);
+      await api.answerCallbackQuery(callbackQuery.id, `Rating set to ${nextRating.toUpperCase()}`);
       await api.editMessageText(
         msg.chat.id,
         msg.message_id,
         `⚙️ <b>Bot Settings Panel</b>\n\n` +
           `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${settings.rating.toUpperCase()}</code>\n` +
-          `• <b>Daily Cron Broadcast:</b> <code>Active</code>\n\n` +
-          `Use the buttons below to toggle configuration:`,
-        { reply_markup: getSettingsKeyboard(settings.source, settings.rating) }
+          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
+          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
+          `Use the buttons below to customize:`,
+        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
       );
       break;
     }
 
-    case "fetch_top10": {
-      await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10...");
-      await sendTop10ToChat(api, msg.chat.id, settings.source, settings.rating);
+    case "cycle_limit": {
+      const nextLimit = settings.limit <= 3 ? 5 : settings.limit <= 5 ? 10 : 3;
+      settings = { ...settings, limit: nextLimit };
+      await saveSettings(env, settings);
+      await api.answerCallbackQuery(callbackQuery.id, `Count set to ${nextLimit} images`);
+      await api.editMessageText(
+        msg.chat.id,
+        msg.message_id,
+        `⚙️ <b>Bot Settings Panel</b>\n\n` +
+          `• <b>Default Source:</b> <code>${settings.source}</code>\n` +
+          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
+          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
+          `Use the buttons below to customize:`,
+        { reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit) }
+      );
+      break;
+    }
+
+    case "fetch_top": {
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching top ${settings.limit}...`);
+      await sendBooruPostsToChat(api, msg.chat.id, settings.source, settings.rating, settings.limit, workerOrigin);
       break;
     }
 
@@ -677,36 +724,10 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
   }
 }
 
-async function handleScheduledBroadcast(env) {
-  const api = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
-  const settings = await getSettings(env);
-
-  const targets = new Set();
-  if (settings.ownerChatId) targets.add(settings.ownerChatId);
-  settings.subscribedChatIds.forEach((id) => targets.add(id));
-
-  if (targets.size === 0) {
-    console.warn("No subscribed chats found for daily broadcast.");
-    return;
-  }
-
-  for (const chatId of targets) {
-    try {
-      await sendTop10ToChat(api, chatId, settings.source, settings.rating);
-    } catch (err) {
-      console.error(`Daily broadcast failed for chat ${chatId}:`, err);
-    }
-  }
-}
-
-// ==========================================
-// Cloudflare Workers Entry Point
-// ==========================================
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Healthcheck
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
       return new Response(
         JSON.stringify({
@@ -719,42 +740,71 @@ export default {
       );
     }
 
-    // Helper: setup webhook by visiting GET /setup-webhook
-    if (request.method === "GET" && url.pathname === "/setup-webhook") {
-      if (!env.TELEGRAM_BOT_TOKEN) {
-        return new Response("Error: TELEGRAM_BOT_TOKEN variable/secret is not set in Worker settings.", { status: 500 });
-      }
-      const webhookUrl = `${url.origin}/webhook`;
-      const api = new TelegramApi(env.TELEGRAM_BOT_TOKEN);
-      const res = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
+    if (request.method === "GET" && url.pathname === "/proxy") {
+      const targetUrl = url.searchParams.get("url");
+      if (!targetUrl) return new Response("Missing url parameter", { status: 400 });
 
-      return new Response(
-        JSON.stringify({ configured_url: webhookUrl, telegram_response: res }, null, 2),
-        { headers: { "Content-Type": "application/json" } }
-      );
+      try {
+        const parsed = new URL(targetUrl);
+        const host = parsed.hostname.toLowerCase();
+        if (!host.endsWith("donmai.us") && !host.endsWith("yande.re")) {
+          return new Response("Forbidden host", { status: 403 });
+        }
+
+        const isDanbooru = host.includes("donmai.us");
+        const referer = isDanbooru ? "https://danbooru.donmai.us/" : "https://yande.re/";
+
+        const imgRes = await fetch(targetUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": referer,
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          },
+        });
+
+        if (!imgRes.ok) {
+          return new Response(`Upstream fetch failed: ${imgRes.status}`, { status: imgRes.status });
+        }
+
+        const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+        return new Response(imgRes.body, {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=86400, s-maxage=86400",
+          },
+        });
+      } catch (err) {
+        return new Response(`Proxy error: ${err.message}`, { status: 500 });
+      }
     }
 
-    // Telegram Webhook Handler
+    const token = env.TELEGRAM_BOT_TOKEN || globalThis.TELEGRAM_BOT_TOKEN;
+
+    if (request.method === "GET" && url.pathname === "/setup-webhook") {
+      if (!token) return new Response("Error: TELEGRAM_BOT_TOKEN secret is not set.", { status: 500 });
+      const webhookUrl = `${url.origin}/webhook`;
+      const api = new TelegramApi(token);
+      const res = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
+      return new Response(JSON.stringify({ configured_url: webhookUrl, telegram_response: res }, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     if (request.method === "POST" && (url.pathname === "/webhook" || url.pathname === "/")) {
       if (env.SECRET_TOKEN) {
         const headerSecret = request.headers.get("x-telegram-bot-api-secret-token");
-        if (headerSecret !== env.SECRET_TOKEN) {
-          return new Response("Unauthorized", { status: 401 });
-        }
+        if (headerSecret !== env.SECRET_TOKEN) return new Response("Unauthorized", { status: 401 });
       }
 
       try {
         const update = await request.json();
+        const workerOrigin = url.origin;
         if (update.message) {
-          ctx.waitUntil(handleTelegramMessage(update.message, env));
+          ctx.waitUntil(handleTelegramMessage(update.message, env, workerOrigin));
         } else if (update.callback_query) {
-          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env));
+          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env, workerOrigin));
         }
-
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        });
+        return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" }, status: 200 });
       } catch (err) {
         console.error("Webhook processing error:", err);
         return new Response(JSON.stringify({ ok: false, error: err.message }), {
@@ -768,7 +818,8 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    if (!env.TELEGRAM_BOT_TOKEN) {
+    const token = env.TELEGRAM_BOT_TOKEN || globalThis.TELEGRAM_BOT_TOKEN;
+    if (!token) {
       console.error("TELEGRAM_BOT_TOKEN not configured in scheduled cron execution.");
       return;
     }

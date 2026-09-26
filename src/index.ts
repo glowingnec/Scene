@@ -8,7 +8,7 @@ import {
 
 export default {
   /**
-   * HTTP Webhook Request Handler
+   * HTTP Webhook & Proxy Handler
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -28,6 +28,48 @@ export default {
       );
     }
 
+    // High-performance image proxy to bypass Danbooru hotlink protection for Telegram
+    if (request.method === "GET" && url.pathname === "/proxy") {
+      const targetUrl = url.searchParams.get("url");
+      if (!targetUrl) return new Response("Missing url parameter", { status: 400 });
+
+      try {
+        const parsed = new URL(targetUrl);
+        const host = parsed.hostname.toLowerCase();
+        if (
+          !host.endsWith("donmai.us") &&
+          !host.endsWith("yande.re")
+        ) {
+          return new Response("Forbidden host", { status: 403 });
+        }
+
+        const isDanbooru = host.includes("donmai.us");
+        const referer = isDanbooru ? "https://danbooru.donmai.us/" : "https://yande.re/";
+
+        const imgRes = await fetch(targetUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": referer,
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          },
+        });
+
+        if (!imgRes.ok) {
+          return new Response(`Upstream fetch failed: ${imgRes.status}`, { status: imgRes.status });
+        }
+
+        const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+        return new Response(imgRes.body, {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=86400, s-maxage=86400",
+          },
+        });
+      } catch (err: any) {
+        return new Response(`Proxy error: ${err?.message}`, { status: 500 });
+      }
+    }
+
     const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;
 
     // Helper endpoint to register webhook automatically: GET /setup-webhook
@@ -43,10 +85,14 @@ export default {
       const res = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
 
       return new Response(
-        JSON.stringify({
-          configured_url: webhookUrl,
-          telegram_response: res,
-        }, null, 2),
+        JSON.stringify(
+          {
+            configured_url: webhookUrl,
+            telegram_response: res,
+          },
+          null,
+          2
+        ),
         {
           headers: { "Content-Type": "application/json" },
         }
@@ -65,12 +111,13 @@ export default {
 
       try {
         const update = (await request.json()) as TelegramUpdate;
+        const workerOrigin = url.origin;
 
         // Process message asynchronously without blocking Telegram's webhook timeout
         if (update.message) {
-          ctx.waitUntil(handleTelegramMessage(update.message, env));
+          ctx.waitUntil(handleTelegramMessage(update.message, env, workerOrigin));
         } else if (update.callback_query) {
-          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env));
+          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env, workerOrigin));
         }
 
         return new Response(JSON.stringify({ ok: true }), {
@@ -81,7 +128,7 @@ export default {
         console.error("Webhook processing error:", err);
         return new Response(JSON.stringify({ ok: false, error: err?.message }), {
           headers: { "Content-Type": "application/json" },
-          status: 200, // Still return 200 to Telegram to prevent retry floods
+          status: 200,
         });
       }
     }
@@ -90,7 +137,7 @@ export default {
   },
 
   /**
-   * Cron Scheduled Trigger Handler (Runs every day)
+   * Cron Scheduled Trigger Handler (Runs daily)
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;

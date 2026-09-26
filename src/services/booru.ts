@@ -1,14 +1,15 @@
 import { BooruPost, BooruSource, RatingFilter } from "../types";
-import { fetchDanbooruTop10 } from "./danbooru";
-import { fetchYandereTop10 } from "./yandere";
+import { fetchDanbooruPosts } from "./danbooru";
+import { fetchYanderePosts } from "./yandere";
 
-export async function fetchTop10Posts(
+export async function fetchBooruPosts(
   source: BooruSource,
-  rating: RatingFilter
+  rating: RatingFilter,
+  limit: number = 10
 ): Promise<BooruPost[]> {
   if (source === "danbooru") {
-    return await fetchDanbooruTop10(rating);
+    return await fetchDanbooruPosts(rating, limit);
   } else {
-    return await fetchYandereTop10(rating);
+    return await fetchYanderePosts(rating, limit);
   }
 }

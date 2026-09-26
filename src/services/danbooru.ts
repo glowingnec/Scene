@@ -1,6 +1,10 @@
 import { BooruPost, RatingFilter } from "../types";
 
-const USER_AGENT = "BooruTodayBot/1.0 (Cloudflare Workers; Telegram Bot by @cheytac29)";
+const DANBOORU_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Referer": "https://danbooru.donmai.us/",
+};
 
 interface DanbooruRawPost {
   id: number;
@@ -27,38 +31,41 @@ interface DanbooruRawPost {
   };
 }
 
-export async function fetchDanbooruTop10(ratingFilter: RatingFilter): Promise<BooruPost[]> {
-  const headers = {
-    "User-Agent": USER_AGENT,
-    "Accept": "application/json",
-  };
-
+export async function fetchDanbooruPosts(
+  ratingFilter: RatingFilter,
+  limit: number = 10
+): Promise<BooruPost[]> {
   let rawPosts: DanbooruRawPost[] = [];
 
-  // Primary: explore popular posts of the day
+  // Try rank order on posts.json (most reliable for Danbooru)
   try {
-    const popularUrl = "https://danbooru.donmai.us/explore/posts/popular.json?scale=day";
-    const res = await fetch(popularUrl, { headers });
+    let tagQuery = "order:rank";
+    if (ratingFilter === "sfw") {
+      tagQuery += " rating:g,s";
+    } else if (ratingFilter === "nsfw") {
+      tagQuery += " rating:q,e";
+    }
+    // "all" has no rating tag
+
+    const url = `https://danbooru.donmai.us/posts.json?tags=${encodeURIComponent(tagQuery)}&limit=${Math.max(limit * 3, 30)}`;
+    const res = await fetch(url, { headers: DANBOORU_HEADERS });
     if (res.ok) {
       const data = (await res.json()) as DanbooruRawPost[];
       if (Array.isArray(data) && data.length > 0) {
         rawPosts = data;
       }
+    } else {
+      console.warn(`Danbooru posts.json failed with HTTP ${res.status}: ${res.statusText}`);
     }
   } catch (err) {
-    console.warn("Danbooru popular.json request failed, trying fallback:", err);
+    console.warn("Danbooru rank query error:", err);
   }
 
-  // Fallback: search by order:rank or order:score
+  // Fallback 1: explore popular posts endpoint
   if (rawPosts.length === 0) {
     try {
-      const ratingTag = ratingFilter === "sfw" ? "rating:g,s" : "";
-      const searchTags = ["order:rank", ratingTag].filter(Boolean).join(" ");
-      const searchUrl = `https://danbooru.donmai.us/posts.json?tags=${encodeURIComponent(
-        searchTags
-      )}&limit=30`;
-
-      const res = await fetch(searchUrl, { headers });
+      const popularUrl = "https://danbooru.donmai.us/explore/posts/popular.json?scale=day";
+      const res = await fetch(popularUrl, { headers: DANBOORU_HEADERS });
       if (res.ok) {
         const data = (await res.json()) as DanbooruRawPost[];
         if (Array.isArray(data)) {
@@ -66,7 +73,23 @@ export async function fetchDanbooruTop10(ratingFilter: RatingFilter): Promise<Bo
         }
       }
     } catch (err) {
-      console.error("Danbooru fallback posts search failed:", err);
+      console.warn("Danbooru popular.json fallback error:", err);
+    }
+  }
+
+  // Fallback 2: score order
+  if (rawPosts.length === 0) {
+    try {
+      const res = await fetch(
+        "https://danbooru.donmai.us/posts.json?tags=order:score&limit=40",
+        { headers: DANBOORU_HEADERS }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as DanbooruRawPost[];
+        if (Array.isArray(data)) rawPosts = data;
+      }
+    } catch (err) {
+      console.error("Danbooru score query fallback error:", err);
     }
   }
 
@@ -76,31 +99,29 @@ export async function fetchDanbooruTop10(ratingFilter: RatingFilter): Promise<Bo
     if (post.is_banned || post.is_deleted) continue;
 
     const rating = (post.rating || "q").toLowerCase();
-    const isExplicitOrQuestionable = rating === "e" || rating === "q";
+    const isNsfw = rating === "e" || rating === "q";
 
-    // Enforce SFW filter
-    if (ratingFilter === "sfw" && isExplicitOrQuestionable) {
-      continue;
-    }
+    if (ratingFilter === "sfw" && isNsfw) continue;
+    if (ratingFilter === "nsfw" && !isNsfw) continue;
+    // "all" accepts both
 
-    // Determine highest quality suitable image URL for Telegram
+    // Determine image URL
     let imageUrl = post.large_file_url || post.file_url;
 
-    // Check media asset variants if large_file_url is missing
     if (!imageUrl && post.media_asset?.variants) {
-      const sampleVariant = post.media_asset.variants.find(
-        (v) => v.type === "sample" || v.type === "1080p" || v.type === "720p"
+      const preferred = post.media_asset.variants.find(
+        (v) => v.type === "sample" || v.type === "720p" || v.type === "1080p"
       );
-      if (sampleVariant) {
-        imageUrl = sampleVariant.url;
-      } else if (post.media_asset.variants.length > 0) {
-        imageUrl = post.media_asset.variants[0].url;
-      }
+      imageUrl = preferred ? preferred.url : post.media_asset.variants[0]?.url;
     }
 
     if (!imageUrl) continue;
 
-    // Filter out video files like mp4 or webm, as Telegram photo media group expects photos
+    // Resolve relative URLs if any
+    if (imageUrl.startsWith("/")) {
+      imageUrl = `https://danbooru.donmai.us${imageUrl}`;
+    }
+
     const ext = (post.file_ext || "").toLowerCase();
     if (ext === "mp4" || ext === "webm" || ext === "zip") continue;
 
@@ -110,13 +131,13 @@ export async function fetchDanbooruTop10(ratingFilter: RatingFilter): Promise<Bo
       imageUrl,
       postUrl: `https://danbooru.donmai.us/posts/${post.id}`,
       rating,
-      isNsfw: isExplicitOrQuestionable,
+      isNsfw,
       tags: (post.tag_string || "").split(" ").slice(0, 15),
       artist: post.tag_string_artist?.replace(/ /g, ", ") || undefined,
       score: post.score || post.fav_count || 0,
     });
 
-    if (validPosts.length >= 10) break;
+    if (validPosts.length >= limit) break;
   }
 
   return validPosts;

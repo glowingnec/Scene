@@ -12,11 +12,13 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers the **t
   - Exclusively recognizes `@cheytac29` as the bot owner.
   - Only `@cheytac29` can toggle SFW/NSFW, change source, manage subscriptions, or access settings.
   - Configurable strict privacy mode (`RESTRICT_ALL_TO_OWNER`) to reject non-owners entirely if preferred.
-- **SFW & NSFW Toggles**:
+- **SFW, NSFW & BOTH (All) Toggles**:
   - **SFW**: Delivers strictly safe / general ratings.
   - **NSFW**: Delivers questionable and explicit ratings, with Telegram's native spoiler blur enabled.
-- **Interactive Inline Buttons**: Easy-to-use `/settings` panel to toggle source and rating in one click.
-- **Zero Heavy Dependencies**: Pure TypeScript utilizing native Web Standards (`fetch`, `Request`, `Response`) and native Telegram Bot API.
+  - **ALL (Both)**: Delivers all top art without rating filters.
+- **Configurable Display Count**: Choose how many works to display (1 to 10 images) via `/limit <1-10>` or inline settings.
+- **Shortened Commands**: `/dbr` (Danbooru) and `/yan` (yande.re) for fast access.
+- **Built-in Image Proxy**: Bypasses Danbooru CDN hotlink blocks so Danbooru images always load in Telegram.
 
 ---
 
@@ -25,15 +27,17 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers the **t
 | Command | Audience | Description |
 | :--- | :--- | :--- |
 | `/start` | Everyone | Welcomes user, detects owner `@cheytac29`, registers chat for daily delivery. |
-| `/today` or `/top10` | Everyone | Pulls the top 10 images of the day using current settings. |
-| `/danbooru [sfw\|nsfw]`| Everyone | Pulls top 10 images from Danbooru right now. |
-| `/yandere [sfw\|nsfw]` | Everyone | Pulls top 10 images from yande.re right now. |
+| `/dbr [count] [sfw\|nsfw\|all]` | Everyone | Pulls top Danbooru images (e.g. `/dbr`, `/dbr 5`, `/dbr all`). |
+| `/yan [count] [sfw\|nsfw\|all]` | Everyone | Pulls top yande.re images (e.g. `/yan`, `/yan 5`, `/yan all`). |
+| `/today [count] [sfw\|nsfw\|all]` | Everyone | Pulls top images of the day using current settings. |
 | `/settings` | **Owner Only** | Opens the interactive settings control panel. |
-| `/sfw` | **Owner Only** | Switches rating filter to SFW. |
-| `/nsfw` | **Owner Only** | Switches rating filter to NSFW. |
+| `/sfw` | **Owner Only** | Switches default rating filter to SFW. |
+| `/nsfw` | **Owner Only** | Switches default rating filter to NSFW. |
+| `/all` or `/both` | **Owner Only** | Switches default rating to BOTH (SFW + NSFW). |
+| `/limit <1-10>` | **Owner Only** | Sets default number of images to display (e.g. `/limit 5`). |
 | `/source <danbooru\|yandere>` | **Owner Only** | Switches default daily source. |
-| `/subscribe` | **Owner Only** | Subscribes the current chat to daily cron broadcasts. |
-| `/unsubscribe` | **Owner Only** | Unsubscribes the current chat from daily cron broadcasts. |
+| `/subscribe` | **Owner Only** | Subscribes the current chat to daily 8:00 AM UTC+7 deliveries. |
+| `/unsubscribe` | **Owner Only** | Unsubscribes from daily deliveries. |
 | `/help` | Everyone | Shows the command list and instructions. |
 
 ---

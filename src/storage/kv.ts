@@ -5,13 +5,16 @@ const SETTINGS_KEY = "booru_bot_settings";
 export function getDefaultSettings(env: Env): BotSettings {
   const defaultSource: BooruSource =
     env.DEFAULT_SOURCE?.toLowerCase() === "yandere" ? "yandere" : "danbooru";
+  const rawRating = env.DEFAULT_RATING?.toLowerCase();
   const defaultRating: RatingFilter =
-    env.DEFAULT_RATING?.toLowerCase() === "nsfw" ? "nsfw" : "sfw";
+    rawRating === "all" ? "all" : rawRating === "nsfw" ? "nsfw" : "sfw";
+  const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : 10;
   const ownerChatId = env.OWNER_CHAT_ID ? parseInt(env.OWNER_CHAT_ID, 10) : undefined;
 
   return {
     source: defaultSource,
     rating: defaultRating,
+    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 10 ? 10 : defaultLimit,
     ownerChatId: isNaN(ownerChatId as number) ? undefined : ownerChatId,
     subscribedChatIds: ownerChatId && !isNaN(ownerChatId) ? [ownerChatId] : [],
     spoilerNsfw: true,
@@ -30,6 +33,7 @@ export async function getSettings(env: Env): Promise<BotSettings> {
         return {
           ...defaults,
           ...stored,
+          limit: stored.limit || defaults.limit || 10,
           subscribedChatIds: stored.subscribedChatIds || defaults.subscribedChatIds || [],
         };
       }
@@ -79,6 +83,14 @@ export async function setRating(env: Env, rating: RatingFilter): Promise<BotSett
 export async function setSource(env: Env, source: BooruSource): Promise<BotSettings> {
   const current = await getSettings(env);
   const updated: BotSettings = { ...current, source };
+  await saveSettings(env, updated);
+  return updated;
+}
+
+export async function setLimit(env: Env, limit: number): Promise<BotSettings> {
+  const current = await getSettings(env);
+  const clamped = Math.max(1, Math.min(10, limit));
+  const updated: BotSettings = { ...current, limit: clamped };
   await saveSettings(env, updated);
   return updated;
 }
