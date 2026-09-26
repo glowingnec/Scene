@@ -1,0 +1,26 @@
+{
+  "name": "booru-today-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot hosted on Cloudflare Workers delivering daily/on-demand top 10 images from Danbooru or yande.re with SFW/NSFW toggles and owner controls.",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "telegram-bot",
+    "danbooru",
+    "yandere",
+    "anime",
+    "booru"
+  ],
+  "author": "cheytac29",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "typescript": "^5.6.2",
+    "wrangler": "^3.78.10"
+  }
+}

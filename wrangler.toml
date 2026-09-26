@@ -1,0 +1,30 @@
+name = "booru-today-bot"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Scheduled daily trigger at 8:00 AM UTC+7 (01:00 UTC)
+[triggers]
+crons = ["0 1 * * *"]
+
+[vars]
+# Bot owner username (without @, case-insensitive)
+OWNER_USERNAME = "cheytac29"
+# Default source: "danbooru" or "yandere"
+DEFAULT_SOURCE = "danbooru"
+# Default rating filter: "sfw" or "nsfw"
+DEFAULT_RATING = "sfw"
+# If true, only @cheytac29 can trigger bot commands. If false, anyone can request images, but only owner can change settings.
+RESTRICT_ALL_TO_OWNER = "false"
+
+# Optional Cloudflare KV namespace for persisting dynamic settings (rating toggle, source toggle, owner chat ID).
+# If not created yet, the bot gracefully falls back to default vars and in-memory handling.
+# To create and bind KV:
+#   npx wrangler kv:namespace create BOORU_KV
+# Then uncomment and insert your KV id below:
+# [[kv_namespaces]]
+# binding = "BOORU_KV"
+# id = "YOUR_KV_NAMESPACE_ID"
+
+# Secrets required (configure via `wrangler secret put <NAME>`):
+# - TELEGRAM_BOT_TOKEN: Your Telegram bot token from @BotFather
+# - SECRET_TOKEN: (Optional) Secret token for Telegram webhook validation
