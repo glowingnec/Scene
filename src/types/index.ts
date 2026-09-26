@@ -8,8 +8,9 @@ export interface Env {
   DEFAULT_SOURCE?: string;
   DEFAULT_RATING?: string;
   DEFAULT_LIMIT?: string;
-  RESTRICT_ALL_TO_OWNER?: string;
   SECRET_TOKEN?: string;
+  DANBOORU_LOGIN?: string;
+  DANBOORU_API_KEY?: string;
   BOORU_KV?: KVNamespace;
 }
 

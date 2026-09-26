@@ -89,7 +89,8 @@ export async function sendBooruPostsToChat(
   source: BooruSource,
   rating: RatingFilter,
   limit: number = 10,
-  workerOrigin?: string
+  workerOrigin?: string,
+  danbooruAuth?: { login?: string; apiKey?: string }
 ): Promise<void> {
   const sourceName = source === "danbooru" ? "Danbooru" : "yande.re";
   const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
@@ -100,7 +101,7 @@ export async function sendBooruPostsToChat(
   );
 
   try {
-    const posts = await fetchBooruPosts(source, rating, limit);
+    const posts = await fetchBooruPosts(source, rating, limit, danbooruAuth);
 
     if (posts.length === 0) {
       await api.sendMessage(
@@ -236,6 +237,11 @@ export async function handleTelegramMessage(
   const [command, ...args] = text.split(/\s+/);
   const cmd = command.toLowerCase().replace(/@.+$/, "");
 
+  const danbooruAuth =
+    env.DANBOORU_LOGIN && env.DANBOORU_API_KEY
+      ? { login: env.DANBOORU_LOGIN, apiKey: env.DANBOORU_API_KEY }
+      : undefined;
+
   switch (cmd) {
     case "/start": {
       const ownerNotice = owner
@@ -289,7 +295,7 @@ export async function handleTelegramMessage(
     case "/top10": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin);
+      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
       break;
     }
 
@@ -297,7 +303,7 @@ export async function handleTelegramMessage(
     case "/danbooru": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "danbooru", parsed.rating, parsed.limit, workerOrigin);
+      await sendBooruPostsToChat(api, chat.id, "danbooru", parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
       break;
     }
 
@@ -305,7 +311,7 @@ export async function handleTelegramMessage(
     case "/yandere": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin);
+      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
       break;
     }
 
@@ -511,6 +517,10 @@ export async function handleTelegramCallbackQuery(
     }
 
     case "fetch_top": {
+      const danbooruAuth =
+        env.DANBOORU_LOGIN && env.DANBOORU_API_KEY
+          ? { login: env.DANBOORU_LOGIN, apiKey: env.DANBOORU_API_KEY }
+          : undefined;
       await api.answerCallbackQuery(callbackQuery.id, `Fetching top ${settings.limit}...`);
       await sendBooruPostsToChat(
         api,
@@ -518,7 +528,8 @@ export async function handleTelegramCallbackQuery(
         settings.source,
         settings.rating,
         settings.limit,
-        workerOrigin
+        workerOrigin,
+        danbooruAuth
       );
       break;
     }
@@ -532,6 +543,10 @@ export async function handleScheduledBroadcast(env: Env, workerOrigin?: string):
   const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
   const settings = await getSettings(env);
+  const danbooruAuth =
+    env.DANBOORU_LOGIN && env.DANBOORU_API_KEY
+      ? { login: env.DANBOORU_LOGIN, apiKey: env.DANBOORU_API_KEY }
+      : undefined;
 
   const targets = new Set<number>();
   if (settings.ownerChatId) targets.add(settings.ownerChatId);
@@ -550,7 +565,8 @@ export async function handleScheduledBroadcast(env: Env, workerOrigin?: string):
         settings.source,
         settings.rating,
         settings.limit,
-        workerOrigin
+        workerOrigin,
+        danbooruAuth
       );
     } catch (err) {
       console.error(`Daily broadcast failed for chat ${chatId}:`, err);

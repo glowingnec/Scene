@@ -1,11 +1,5 @@
 import { BooruPost, RatingFilter } from "../types";
 
-const DANBOORU_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept": "application/json, text/plain, */*",
-  "Referer": "https://danbooru.donmai.us/",
-};
-
 interface DanbooruRawPost {
   id: number;
   created_at?: string;
@@ -33,64 +27,83 @@ interface DanbooruRawPost {
 
 export async function fetchDanbooruPosts(
   ratingFilter: RatingFilter,
-  limit: number = 10
+  limit: number = 10,
+  auth?: { login?: string; apiKey?: string }
 ): Promise<BooruPost[]> {
+  const headers: Record<string, string> = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://danbooru.donmai.us/",
+  };
+
+  if (auth?.login && auth?.apiKey) {
+    headers["Authorization"] = "Basic " + btoa(`${auth.login}:${auth.apiKey}`);
+  }
+
   let rawPosts: DanbooruRawPost[] = [];
+  let blockedByCloudflare = false;
 
-  // Try rank order on posts.json (most reliable for Danbooru)
+  // Danbooru tags query (Danbooru free tier permits max 2 tags)
+  let tagQuery = "order:rank";
+  if (ratingFilter === "sfw") {
+    tagQuery += " rating:g,s";
+  } else if (ratingFilter === "nsfw") {
+    tagQuery += " rating:q,e";
+  }
+
+  const queryParams = new URLSearchParams({
+    tags: tagQuery,
+    limit: String(Math.max(limit * 3, 30)),
+  });
+
+  if (auth?.login && auth?.apiKey) {
+    queryParams.set("login", auth.login);
+    queryParams.set("api_key", auth.apiKey);
+  }
+
+  const url = `https://danbooru.donmai.us/posts.json?${queryParams.toString()}`;
+
   try {
-    let tagQuery = "order:rank";
-    if (ratingFilter === "sfw") {
-      tagQuery += " rating:g,s";
-    } else if (ratingFilter === "nsfw") {
-      tagQuery += " rating:q,e";
-    }
-    // "all" has no rating tag
-
-    const url = `https://danbooru.donmai.us/posts.json?tags=${encodeURIComponent(tagQuery)}&limit=${Math.max(limit * 3, 30)}`;
-    const res = await fetch(url, { headers: DANBOORU_HEADERS });
+    const res = await fetch(url, { headers });
     if (res.ok) {
       const data = (await res.json()) as DanbooruRawPost[];
       if (Array.isArray(data) && data.length > 0) {
         rawPosts = data;
       }
     } else {
-      console.warn(`Danbooru posts.json failed with HTTP ${res.status}: ${res.statusText}`);
+      const text = await res.text();
+      if (res.status === 403 || text.includes("Just a moment...") || text.includes("challenges.cloudflare.com")) {
+        blockedByCloudflare = true;
+      }
+      console.warn(`Danbooru posts.json failed HTTP ${res.status}:`, text.slice(0, 200));
     }
   } catch (err) {
     console.warn("Danbooru rank query error:", err);
   }
 
-  // Fallback 1: explore popular posts endpoint
-  if (rawPosts.length === 0) {
+  // Fallback 1: explore popular posts
+  if (rawPosts.length === 0 && !blockedByCloudflare) {
     try {
       const popularUrl = "https://danbooru.donmai.us/explore/posts/popular.json?scale=day";
-      const res = await fetch(popularUrl, { headers: DANBOORU_HEADERS });
-      if (res.ok) {
-        const data = (await res.json()) as DanbooruRawPost[];
-        if (Array.isArray(data)) {
-          rawPosts = data;
-        }
-      }
-    } catch (err) {
-      console.warn("Danbooru popular.json fallback error:", err);
-    }
-  }
-
-  // Fallback 2: score order
-  if (rawPosts.length === 0) {
-    try {
-      const res = await fetch(
-        "https://danbooru.donmai.us/posts.json?tags=order:score&limit=40",
-        { headers: DANBOORU_HEADERS }
-      );
+      const res = await fetch(popularUrl, { headers });
       if (res.ok) {
         const data = (await res.json()) as DanbooruRawPost[];
         if (Array.isArray(data)) rawPosts = data;
+      } else {
+        const text = await res.text();
+        if (res.status === 403 || text.includes("Just a moment...")) {
+          blockedByCloudflare = true;
+        }
       }
     } catch (err) {
-      console.error("Danbooru score query fallback error:", err);
+      console.warn("Danbooru popular fallback error:", err);
     }
+  }
+
+  if (blockedByCloudflare && rawPosts.length === 0) {
+    throw new Error(
+      "Danbooru has Cloudflare Bot Protection enabled against cloud servers. Please add a free Danbooru API key (DANBOORU_LOGIN & DANBOORU_API_KEY) in Cloudflare settings, or use /yan."
+    );
   }
 
   const validPosts: BooruPost[] = [];
@@ -103,9 +116,7 @@ export async function fetchDanbooruPosts(
 
     if (ratingFilter === "sfw" && isNsfw) continue;
     if (ratingFilter === "nsfw" && !isNsfw) continue;
-    // "all" accepts both
 
-    // Determine image URL
     let imageUrl = post.large_file_url || post.file_url;
 
     if (!imageUrl && post.media_asset?.variants) {
@@ -117,7 +128,6 @@ export async function fetchDanbooruPosts(
 
     if (!imageUrl) continue;
 
-    // Resolve relative URLs if any
     if (imageUrl.startsWith("/")) {
       imageUrl = `https://danbooru.donmai.us${imageUrl}`;
     }

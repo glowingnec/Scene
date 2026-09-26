@@ -116,34 +116,68 @@ function getSettingsKeyboard(source, rating, limit) {
   };
 }
 
-async function fetchDanbooruPosts(ratingFilter, limit = 10) {
+async function fetchDanbooruPosts(ratingFilter, limit = 10, auth) {
   let rawPosts = [];
+  const headers = { ...DANBOORU_HEADERS };
+
+  if (auth && auth.login && auth.apiKey) {
+    headers["Authorization"] = "Basic " + btoa(`${auth.login}:${auth.apiKey}`);
+  }
+
+  let tagQuery = "order:rank";
+  if (ratingFilter === "sfw") tagQuery += " rating:g,s";
+  else if (ratingFilter === "nsfw") tagQuery += " rating:q,e";
+
+  const queryParams = new URLSearchParams({
+    tags: tagQuery,
+    limit: String(Math.max(limit * 3, 30)),
+  });
+
+  if (auth && auth.login && auth.apiKey) {
+    queryParams.set("login", auth.login);
+    queryParams.set("api_key", auth.apiKey);
+  }
+
+  let blockedByCloudflare = false;
 
   try {
-    let tagQuery = "order:rank";
-    if (ratingFilter === "sfw") tagQuery += " rating:g,s";
-    else if (ratingFilter === "nsfw") tagQuery += " rating:q,e";
-
-    const url = `https://danbooru.donmai.us/posts.json?tags=${encodeURIComponent(tagQuery)}&limit=${Math.max(limit * 3, 30)}`;
-    const res = await fetch(url, { headers: DANBOORU_HEADERS });
+    const url = `https://danbooru.donmai.us/posts.json?${queryParams.toString()}`;
+    const res = await fetch(url, { headers });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) rawPosts = data;
+    } else {
+      const text = await res.text();
+      if (res.status === 403 || text.includes("Just a moment...")) {
+        blockedByCloudflare = true;
+      }
     }
   } catch (err) {
     console.warn("Danbooru rank query error:", err);
   }
 
-  if (rawPosts.length === 0) {
+  if (rawPosts.length === 0 && !blockedByCloudflare) {
     try {
-      const res = await fetch("https://danbooru.donmai.us/explore/posts/popular.json?scale=day", { headers: DANBOORU_HEADERS });
+      const popularUrl = "https://danbooru.donmai.us/explore/posts/popular.json?scale=day" + (auth && auth.login ? `&login=${auth.login}&api_key=${auth.apiKey}` : "");
+      const res = await fetch(popularUrl, { headers });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) rawPosts = data;
+      } else {
+        const text = await res.text();
+        if (res.status === 403 || text.includes("Just a moment...")) {
+          blockedByCloudflare = true;
+        }
       }
     } catch (err) {
       console.warn("Danbooru popular fallback error:", err);
     }
+  }
+
+  if (blockedByCloudflare && rawPosts.length === 0) {
+    throw new Error(
+      "Danbooru requires your free API key to pass Cloudflare. Please set DANBOORU_LOGIN & DANBOORU_API_KEY in Cloudflare Settings."
+    );
   }
 
   if (rawPosts.length === 0) {
@@ -364,14 +398,14 @@ class TelegramApi {
   }
 }
 
-async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, workerOrigin) {
+async function sendBooruPostsToChat(api, chatId, source, rating, limit = 10, workerOrigin, danbooruAuth) {
   const sourceName = source === "danbooru" ? "Danbooru" : "yande.re";
   const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
 
   await api.sendMessage(chatId, `⏳ <i>Fetching top ${limit} images from <b>${sourceName}</b> [${ratingLabel}]...</i>`);
 
   try {
-    const posts = source === "danbooru" ? await fetchDanbooruPosts(rating, limit) : await fetchYanderePosts(rating, limit);
+    const posts = source === "danbooru" ? await fetchDanbooruPosts(rating, limit, danbooruAuth) : await fetchYanderePosts(rating, limit);
     if (posts.length === 0) {
       await api.sendMessage(chatId, `⚠️ No images found matching rating <b>${ratingLabel}</b> on ${sourceName} today.`);
       return;
@@ -478,6 +512,11 @@ async function handleTelegramMessage(message, env, workerOrigin) {
   const [command, ...args] = text.split(/\s+/);
   const cmd = command.toLowerCase().replace(/@.+$/, "");
 
+  const danbooruAuth =
+    env.DANBOORU_LOGIN && env.DANBOORU_API_KEY
+      ? { login: env.DANBOORU_LOGIN, apiKey: env.DANBOORU_API_KEY }
+      : undefined;
+
   switch (cmd) {
     case "/start": {
       const ownerNotice = owner
@@ -512,7 +551,7 @@ async function handleTelegramMessage(message, env, workerOrigin) {
           `• <code>/dbr</code> or <code>/danbooru</code> - Danbooru top images\n` +
           `  <i>Examples: <code>/dbr</code>, <code>/dbr 5</code>, <code>/dbr 5 nsfw</code>, <code>/dbr all</code></i>\n` +
           `• <code>/yan</code> or <code>/yandere</code> - yande.re top images\n` +
-          `  <i>Examples: <code>/yan</code>, <code>/yan 5</code>, <code>/yan all</code></i>\n` +
+          `  <i>Examples: <code>/yan</code>, <code>/yan 5</code>, <code>/yan 5 all</code></i>\n` +
           `• <code>/today</code> or <code>/top10</code> - Fetch with current settings\n\n` +
           `<b>Owner Commands (@cheytac29):</b>\n` +
           `• <code>/settings</code> - Interactive settings panel\n` +
@@ -531,7 +570,7 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/top10": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin);
+      await sendBooruPostsToChat(api, chat.id, settings.source, parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
       break;
     }
 
@@ -539,7 +578,7 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/danbooru": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "danbooru", parsed.rating, parsed.limit, workerOrigin);
+      await sendBooruPostsToChat(api, chat.id, "danbooru", parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
       break;
     }
 
@@ -547,7 +586,7 @@ async function handleTelegramMessage(message, env, workerOrigin) {
     case "/yandere": {
       const settings = await getSettings(env);
       const parsed = parseCommandArgs(args, settings.rating, settings.limit);
-      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin);
+      await sendBooruPostsToChat(api, chat.id, "yandere", parsed.rating, parsed.limit, workerOrigin, danbooruAuth);
       break;
     }
 
