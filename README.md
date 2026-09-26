@@ -1,45 +1,47 @@
 # 🌸 Booru Today Telegram Bot (Cloudflare Workers)
 
-A serverless Telegram bot hosted on **Cloudflare Workers** that delivers the **top 10 daily images** from **Danbooru** or **yande.re**, both on-demand and automatically every day via cron triggers.
+A serverless Telegram bot hosted on **Cloudflare Workers** that delivers top anime art from **yande.re** and **Gelbooru**, both on-demand and automatically every day via cron triggers.
 
 ## ✨ Features
 
-- **Top 10 Daily Anime Art**: Pulls the highest scoring / most popular images of the day from either **Danbooru** or **yande.re**.
+- **Top Daily Anime Art**: Pulls the highest scoring / most popular images of the day from **yande.re** or **Gelbooru**.
 - **Delivery Modes**:
-  - **Every day automatically**: Scheduled Cloudflare Cron Trigger sends top 10 daily art to the owner/subscribed chats.
-  - **On-demand by request**: Trigger anytime with `/today`, `/top10`, `/danbooru`, or `/yandere`.
-- **Owner-Exclusive Security**:
-  - Exclusively recognizes `@cheytac29` as the bot owner.
-  - Only `@cheytac29` can toggle SFW/NSFW, change source, manage subscriptions, or access settings.
-  - Configurable strict privacy mode (`RESTRICT_ALL_TO_OWNER`) to reject non-owners entirely if preferred.
+  - **Every day automatically**: Scheduled Cloudflare Cron Trigger sends daily art to the owner at 8:00 AM UTC+7 (01:00 UTC).
+  - **On-demand by request**: Trigger anytime with `/today`, `/yan`, or `/gel`.
+- **Private Bot with Owner-Exclusive Security**:
+  - Strictly configured for owner `@cheytac29`.
+  - Non-owners are denied with: `Access Denied: You don't have permission`.
 - **SFW, NSFW & BOTH (All) Toggles**:
-  - **SFW**: Delivers strictly safe / general ratings.
-  - **NSFW**: Delivers questionable and explicit ratings, with Telegram's native spoiler blur enabled.
-  - **ALL (Both)**: Delivers all top art without rating filters.
-- **Configurable Display Count**: Choose how many works to display (1 to 10 images) via `/limit <1-10>` or inline settings.
-- **Shortened Commands**: `/dbr` (Danbooru) and `/yan` (yande.re) for fast access.
-- **Built-in Image Proxy**: Bypasses Danbooru CDN hotlink blocks so Danbooru images always load in Telegram.
+  - **SFW**: Safe & general posts only.
+  - **NSFW**: Questionable and explicit posts, with Telegram's native spoiler blur.
+  - **BOTH**: All top posts without rating filters.
+- **Configurable Display Count**:
+  - Configure pulling from 1 up to 50 images (`/limit <1-50>` or interactive `/settings` panel).
+  - Set as default for everyday scheduled deliveries.
+  - Automatic batching: Telegram media groups are automatically chunked into batches of 10.
+- **Short Commands**: `/yan` (yande.re) and `/gel` (Gelbooru).
+- **Built-in Image Proxy**: Proxies images to bypass hotlink protection when needed.
 
 ---
 
 ## 📋 Available Commands
 
-| Command | Audience | Description |
-| :--- | :--- | :--- |
-| `/start` | Everyone | Welcomes user, detects owner `@cheytac29`, registers chat for daily delivery. |
-| `/yan [count] [sfw\|nsfw\|all]` | Everyone | Pulls top yande.re images (e.g. `/yan`, `/yan 5`, `/yan all`). |
-| `/gel [count] [sfw\|nsfw\|all]` | Everyone | Pulls top Gelbooru images (e.g. `/gel`, `/gel 5`, `/gel nsfw`). |
-| `/today [count] [sfw\|nsfw\|all]` | Everyone | Pulls top images of the day using current settings. |
-| `/settings` | **Owner Only** | Opens the interactive settings control panel. |
-| `/sfw` | **Owner Only** | Switches default rating filter to SFW. |
-| `/nsfw` | **Owner Only** | Switches default rating filter to NSFW. |
-| `/all` or `/both` | **Owner Only** | Switches default rating to BOTH (SFW + NSFW). |
-| `/limit <1-10>` | **Owner Only** | Sets default number of images to display (e.g. `/limit 5`). |
-| `/source <yandere\|gelbooru>` | **Owner Only** | Switches default daily source. |
-| `/test_gel` | Everyone | Diagnostic test for Gelbooru API connection. |
-| `/subscribe` | **Owner Only** | Subscribes current chat to daily 8:00 AM UTC+7 deliveries. |
-| `/unsubscribe` | **Owner Only** | Unsubscribes from daily deliveries. |
-| `/help` | Everyone | Shows the command list and instructions. |
+| Command | Description |
+| :--- | :--- |
+| `/start` | Welcome and quick start guide |
+| `/yan [count] [sfw\|nsfw\|all]` | Pull top yande.re images (e.g. `/yan`, `/yan 15`, `/yan 20 all`) |
+| `/gel [count] [sfw\|nsfw\|all]` | Pull top Gelbooru images (e.g. `/gel`, `/gel 15`, `/gel 20 nsfw`) |
+| `/today [count] [sfw\|nsfw\|all]` | Pull top images of the day using current settings |
+| `/settings` | Open interactive settings panel |
+| `/limit <1-50>` | Set default everyday image count (e.g. `/limit 15`) |
+| `/source <yandere\|gelbooru>` | Switch default source |
+| `/sfw` | Set default rating to SFW (Safe only) |
+| `/nsfw` | Set default rating to NSFW (Questionable / Explicit) |
+| `/all` | Set default rating to BOTH (SFW + NSFW) |
+| `/subscribe` | Register chat for daily 8:00 AM UTC+7 delivery |
+| `/unsubscribe` | Cancel daily delivery |
+| `/test_gel` | Diagnostic test for Gelbooru API connection |
+| `/help` | Command reference |
 
 ---
 

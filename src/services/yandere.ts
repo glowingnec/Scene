@@ -75,7 +75,7 @@ export async function fetchYanderePosts(
       const searchTags = ["order:score", ratingTag].filter(Boolean).join(" ");
       const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(
         searchTags
-      )}&limit=${Math.max(limit * 3, 30)}`;
+      )}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
       const res = await fetch(searchUrl, { headers: YANDERE_HEADERS });
       if (res.ok) {
         const data = (await res.json()) as YandereRawPost[];

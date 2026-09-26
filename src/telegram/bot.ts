@@ -73,7 +73,7 @@ function getSettingsKeyboard(
       ],
       [
         {
-          text: `🔢 Display Count: ${limit} images`,
+          text: `🔢 Default Count: ${limit} images`,
           callback_data: "cycle_limit",
         },
       ],
@@ -85,6 +85,18 @@ function getSettingsKeyboard(
       ],
     ],
   };
+}
+
+function formatSettingsPanelText(settings: { source: BooruSource; rating: RatingFilter; limit: number }): string {
+  return (
+    `⚙️ <b>Bot Settings Panel</b>\n\n` +
+    `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
+    `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
+    `• <b>Default Everyday Count:</b> <code>${settings.limit} images</code>\n` +
+    `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
+    `💡 <i>Tip: Use <code>/limit &lt;1-50&gt;</code> (e.g. <code>/limit 15</code>) to set any exact everyday count.</i>\n\n` +
+    `Use the buttons below to customize:`
+  );
 }
 
 export async function sendBooruPostsToChat(
@@ -144,37 +156,45 @@ export async function sendBooruPostsToChat(
       };
     });
 
-    const sendResult = await api.sendMediaGroup(chatId, mediaGroup);
+    let totalSent = 0;
 
-    if (!sendResult.ok) {
-      console.warn("sendMediaGroup failed, using individual sendPhoto fallback:", sendResult.description);
-      let successCount = 0;
+    // Telegram sendMediaGroup accepts 2-10 items. For limits > 10, batch in chunks of 10.
+    for (let i = 0; i < mediaGroup.length; i += 10) {
+      const batch = mediaGroup.slice(i, i + 10);
 
-      for (let i = 0; i < posts.length; i++) {
-        const post = posts[i];
-        const caption = `#${i + 1} <b>${sourceName}</b> • Score: ${post.score} [${post.rating.toUpperCase()}]\n🔗 <a href="${post.postUrl}">Post Link</a>`;
-
-        let photoUrl = post.imageUrl;
-        if (workerOrigin && post.imageUrl.includes("gelbooru.com")) {
-          photoUrl = `${workerOrigin}/proxy?url=${encodeURIComponent(post.imageUrl)}`;
+      if (batch.length === 1) {
+        const item = batch[0];
+        const photoRes = await api.sendPhoto(chatId, item.media, {
+          caption: item.caption,
+          has_spoiler: item.has_spoiler,
+          parse_mode: item.parse_mode,
+        });
+        if (photoRes.ok) totalSent++;
+        else console.warn("sendPhoto for single item failed:", photoRes.description);
+      } else {
+        const sendResult = await api.sendMediaGroup(chatId, batch);
+        if (sendResult.ok) {
+          totalSent += batch.length;
+        } else {
+          console.warn("sendMediaGroup batch failed, falling back to sendPhoto:", sendResult.description);
+          for (const item of batch) {
+            const photoRes = await api.sendPhoto(chatId, item.media, {
+              caption: item.caption,
+              has_spoiler: item.has_spoiler,
+              parse_mode: item.parse_mode,
+            });
+            if (photoRes.ok) totalSent++;
+          }
         }
-
-        const photoRes = await api.sendPhoto(chatId, photoUrl, {
-          caption,
-          has_spoiler: post.isNsfw,
-          parse_mode: "HTML",
-        });
-
-        if (photoRes.ok) successCount++;
       }
+    }
 
-      if (successCount === 0) {
-        let textSummary = `🌟 <b>Top ${displayCount} Today • ${sourceName}</b> [${ratingLabel}]\n📅 ${todayDate}\n\n`;
-        posts.slice(0, displayCount).forEach((p, i) => {
-          textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score} [${p.rating.toUpperCase()}]\n`;
-        });
-        await api.sendMessage(chatId, textSummary, { disable_web_page_preview: false });
-      }
+    if (totalSent === 0) {
+      let textSummary = `🌟 <b>Top ${displayCount} Today • ${sourceName}</b> [${ratingLabel}]\n📅 ${todayDate}\n\n`;
+      posts.slice(0, displayCount).forEach((p, i) => {
+        textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score} [${p.rating.toUpperCase()}]\n`;
+      });
+      await api.sendMessage(chatId, textSummary, { disable_web_page_preview: false });
     }
   } catch (err: any) {
     console.error("Error in sendBooruPostsToChat:", err);
@@ -200,7 +220,7 @@ function parseCommandArgs(
     else if (lower === "all" || lower === "both") rating = "all";
     else {
       const num = parseInt(lower, 10);
-      if (!isNaN(num) && num > 0 && num <= 10) {
+      if (!isNaN(num) && num > 0 && num <= 50) {
         limit = num;
       }
     }
@@ -222,10 +242,7 @@ export async function handleTelegramMessage(
   const owner = isOwner(from, env);
 
   if (!owner) {
-    await api.sendMessage(
-      chat.id,
-      "⛔ <b>Access Denied:</b> This bot is strictly private and exclusively configured for @cheytac29."
-    );
+    await api.sendMessage(chat.id, "Access Denied: You don't have permission");
     return;
   }
 
@@ -241,25 +258,20 @@ export async function handleTelegramMessage(
 
   switch (cmd) {
     case "/start": {
-      const ownerNotice = owner
-        ? "👑 <b>Owner recognized!</b> Your chat has been registered for daily top art deliveries."
-        : "👋 Welcome! (Bot Owner: @cheytac29)";
-
       await api.sendMessage(
         chat.id,
         `🌸 <b>Booru Today Bot</b>\n\n` +
           `Daily & on-demand top anime art from yande.re & Gelbooru.\n\n` +
-          `${ownerNotice}\n\n` +
           `<b>Available Commands:</b>\n` +
           `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch today's top images\n` +
           `• <code>/yan [count] [sfw|nsfw|all]</code> - yande.re top images\n` +
           `• <code>/gel [count] [sfw|nsfw|all]</code> - Gelbooru top images\n` +
-          `• <code>/settings</code> - Interactive configuration panel (Owner only)\n` +
-          `• <code>/sfw</code> - Safe content only (Owner only)\n` +
-          `• <code>/nsfw</code> - Questionable & explicit content (Owner only)\n` +
-          `• <code>/all</code> - Both SFW and NSFW content (Owner only)\n` +
-          `• <code>/limit &lt;1-10&gt;</code> - Set default image count (Owner only)\n` +
-          `• <code>/source yandere|gelbooru</code> - Set default source (Owner only)\n` +
+          `• <code>/settings</code> - Interactive configuration panel\n` +
+          `• <code>/limit &lt;1-50&gt;</code> - Set default everyday image count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
+          `• <code>/sfw</code>, <code>/nsfw</code>, <code>/all</code> - Quick switch rating filter\n` +
+          `• <code>/subscribe</code> - Register chat for daily 8:00 AM delivery\n` +
+          `• <code>/unsubscribe</code> - Cancel daily delivery\n` +
           `• <code>/help</code> - Command reference`
       );
       break;
@@ -269,19 +281,19 @@ export async function handleTelegramMessage(
       await api.sendMessage(
         chat.id,
         `📖 <b>Help & Command Reference</b>\n\n` +
-          `<b>Quick Fetch Commands:</b>\n` +
-          `• <code>/yan</code> or <code>/yandere</code> - Pull yande.re top images\n` +
-          `  <i>Examples: <code>/yan</code>, <code>/yan 5</code>, <code>/yan 5 all</code></i>\n` +
-          `• <code>/gel</code> or <code>/gelbooru</code> - Pull Gelbooru top images\n` +
-          `  <i>Examples: <code>/gel</code>, <code>/gel 5</code>, <code>/gel 5 nsfw</code></i>\n` +
-          `• <code>/today</code> or <code>/top10</code> - Pull with current settings\n\n` +
-          `<b>Owner Settings Commands (@cheytac29):</b>\n` +
+          `<b>Fetch Commands:</b>\n` +
+          `• <code>/yan [count] [rating]</code> - Pull yande.re top images\n` +
+          `  <i>Examples: <code>/yan</code>, <code>/yan 15</code>, <code>/yan 20 all</code></i>\n` +
+          `• <code>/gel [count] [rating]</code> - Pull Gelbooru top images\n` +
+          `  <i>Examples: <code>/gel</code>, <code>/gel 15</code>, <code>/gel 20 nsfw</code></i>\n` +
+          `• <code>/today [count] [rating]</code> - Pull with default source\n\n` +
+          `<b>Configuration:</b>\n` +
           `• <code>/settings</code> - Interactive control panel\n` +
+          `• <code>/limit &lt;1-50&gt;</code> - Set default everyday image count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/sfw</code> - Set default rating to SFW (Safe only)\n` +
           `• <code>/nsfw</code> - Set default rating to NSFW (Questionable / Explicit)\n` +
           `• <code>/all</code> - Set default rating to Both (SFW + NSFW)\n` +
-          `• <code>/limit &lt;1-10&gt;</code> - Set default display count (e.g. <code>/limit 5</code>)\n` +
-          `• <code>/source &lt;yandere|gelbooru&gt;</code> - Set default source\n` +
           `• <code>/subscribe</code> - Register chat for daily 8:00 AM delivery\n` +
           `• <code>/unsubscribe</code> - Cancel daily delivery`
       );
@@ -357,41 +369,20 @@ export async function handleTelegramMessage(
 
     case "/settings":
     case "/panel": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can modify settings.");
-        return;
-      }
       const settings = await getSettings(env);
-      await api.sendMessage(
-        chat.id,
-        `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
-          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
-          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-          `Use the buttons below to customize:`,
-        {
-          reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
-        }
-      );
+      await api.sendMessage(chat.id, formatSettingsPanelText(settings), {
+        reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
+      });
       break;
     }
 
     case "/sfw": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
-        return;
-      }
       await setRating(env, "sfw");
       await api.sendMessage(chat.id, "🛡️ <b>Rating set to SFW.</b> Safe & general posts will be delivered.");
       break;
     }
 
     case "/nsfw": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
-        return;
-      }
       await setRating(env, "nsfw");
       await api.sendMessage(chat.id, "⚠️ <b>Rating set to NSFW.</b> Questionable & explicit posts will be delivered.");
       break;
@@ -399,10 +390,6 @@ export async function handleTelegramMessage(
 
     case "/all":
     case "/both": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can toggle ratings.");
-        return;
-      }
       await setRating(env, "all");
       await api.sendMessage(chat.id, "🌈 <b>Rating set to BOTH (SFW + NSFW).</b> All top posts will be delivered.");
       break;
@@ -410,25 +397,20 @@ export async function handleTelegramMessage(
 
     case "/limit":
     case "/count": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can set image limit.");
-        return;
-      }
       const num = parseInt(args[0], 10);
-      if (isNaN(num) || num < 1 || num > 10) {
-        await api.sendMessage(chat.id, "ℹ️ Please specify a number between 1 and 10. Example: <code>/limit 5</code>");
+      if (isNaN(num) || num < 1 || num > 50) {
+        await api.sendMessage(chat.id, "ℹ️ Please specify a number between 1 and 50. Example: <code>/limit 15</code>");
         return;
       }
       const updated = await setLimit(env, num);
-      await api.sendMessage(chat.id, `🔢 <b>Default display count set to:</b> <code>${updated.limit} images</code>`);
+      await api.sendMessage(
+        chat.id,
+        `🔢 <b>Default everyday count set to:</b> <code>${updated.limit} images</code>\n<i>This will be used for daily deliveries and default /today, /yan, and /gel commands.</i>`
+      );
       break;
     }
 
     case "/source": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner (@cheytac29) can change source.");
-        return;
-      }
       const target = args[0]?.toLowerCase();
       let resolvedSource: BooruSource | null = null;
       if (target === "gelbooru" || target === "gel" || target === "gbr") resolvedSource = "gelbooru";
@@ -448,20 +430,12 @@ export async function handleTelegramMessage(
     }
 
     case "/subscribe": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner can manage subscriptions.");
-        return;
-      }
       await updateOwnerChatId(env, chat.id);
       await api.sendMessage(chat.id, "✅ This chat is registered for daily 8:00 AM UTC+7 deliveries.");
       break;
     }
 
     case "/unsubscribe": {
-      if (!owner) {
-        await api.sendMessage(chat.id, "🔒 Only bot owner can manage subscriptions.");
-        return;
-      }
       const settings = await getSettings(env);
       const filtered = settings.subscribedChatIds.filter((id) => id !== chat.id);
       await saveSettings(env, { ...settings, subscribedChatIds: filtered });
@@ -484,7 +458,7 @@ export async function handleTelegramCallbackQuery(
   if (!owner) {
     await api.answerCallbackQuery(
       callbackQuery.id,
-      "🔒 Action restricted to bot owner (@cheytac29)",
+      "Access Denied: You don't have permission",
       true
     );
     return;
@@ -511,12 +485,7 @@ export async function handleTelegramCallbackQuery(
       await api.editMessageText(
         msg.chat.id,
         msg.message_id,
-        `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
-          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
-          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-          `Use the buttons below to customize:`,
+        formatSettingsPanelText(settings),
         {
           reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
         }
@@ -532,12 +501,7 @@ export async function handleTelegramCallbackQuery(
       await api.editMessageText(
         msg.chat.id,
         msg.message_id,
-        `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
-          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
-          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-          `Use the buttons below to customize:`,
+        formatSettingsPanelText(settings),
         {
           reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
         }
@@ -546,18 +510,18 @@ export async function handleTelegramCallbackQuery(
     }
 
     case "cycle_limit": {
-      const nextLimit = settings.limit <= 3 ? 5 : settings.limit <= 5 ? 10 : 3;
+      const limitSteps = [5, 10, 15, 20, 25, 30, 50];
+      const currentIndex = limitSteps.indexOf(settings.limit);
+      const nextLimit =
+        currentIndex === -1 || currentIndex === limitSteps.length - 1
+          ? limitSteps[0]
+          : limitSteps[currentIndex + 1];
       settings = await setLimit(env, nextLimit);
-      await api.answerCallbackQuery(callbackQuery.id, `Count set to ${nextLimit} images`);
+      await api.answerCallbackQuery(callbackQuery.id, `Default count set to ${nextLimit} images`);
       await api.editMessageText(
         msg.chat.id,
         msg.message_id,
-        `⚙️ <b>Bot Settings Panel</b>\n\n` +
-          `• <b>Default Source:</b> <code>${getSourceName(settings.source)}</code>\n` +
-          `• <b>Rating Filter:</b> <code>${getRatingBadgeText(settings.rating)}</code>\n` +
-          `• <b>Default Count:</b> <code>${settings.limit} images</code>\n` +
-          `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-          `Use the buttons below to customize:`,
+        formatSettingsPanelText(settings),
         {
           reply_markup: getSettingsKeyboard(settings.source, settings.rating, settings.limit),
         }

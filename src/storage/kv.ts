@@ -14,7 +14,7 @@ export function getDefaultSettings(env: Env): BotSettings {
   return {
     source: defaultSource,
     rating: defaultRating,
-    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 10 ? 10 : defaultLimit,
+    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 50 ? 10 : defaultLimit,
     ownerChatId: isNaN(ownerChatId as number) ? undefined : ownerChatId,
     subscribedChatIds: ownerChatId && !isNaN(ownerChatId) ? [ownerChatId] : [],
     spoilerNsfw: true,
@@ -89,7 +89,7 @@ export async function setSource(env: Env, source: BooruSource): Promise<BotSetti
 
 export async function setLimit(env: Env, limit: number): Promise<BotSettings> {
   const current = await getSettings(env);
-  const clamped = Math.max(1, Math.min(10, limit));
+  const clamped = Math.max(1, Math.min(50, limit));
   const updated: BotSettings = { ...current, limit: clamped };
   await saveSettings(env, updated);
   return updated;

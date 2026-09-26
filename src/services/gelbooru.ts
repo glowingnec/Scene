@@ -41,7 +41,7 @@ export async function fetchGelbooruPosts(
     q: "index",
     json: "1",
     tags: tagQuery,
-    limit: String(Math.max(limit * 3, 30)),
+    limit: String(Math.min(100, Math.max(limit * 2, 30))),
   });
 
   if (auth?.userId && auth?.apiKey) {
