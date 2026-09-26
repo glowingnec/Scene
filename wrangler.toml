@@ -13,7 +13,8 @@ OWNER_USERNAME = "cheytac29"
 DEFAULT_SOURCE = "yandere"
 # Default rating filter: "sfw", "nsfw", or "all"
 DEFAULT_RATING = "sfw"
-# If true, only @cheytac29 can trigger bot commands. If false, anyone can request images, but only owner can change settings.
+# Gelbooru user ID
+GELBOORU_USER_ID = "2060043"
 RESTRICT_ALL_TO_OWNER = "false"
 
 # Optional Secrets (configure in Cloudflare Dashboard -> Variables & Secrets):
