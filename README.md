@@ -7,11 +7,10 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers top ani
 - **Top Daily Anime Art**: Pulls the highest scoring art from **yande.re**.
 - **Defaults**:
   - **Rating:** ALL (SFW + Questionable + Explicit)
-  - **Count:** 15 images (batched into media groups of 10 + 5)
+  - **Count:** 30 images (batched into media groups of 10)
   - **Spoilers:** OFF (Unblurred by default)
 - **Delivery Modes**:
   - **Every day automatically**: Scheduled Cloudflare Cron Trigger sends daily art to the owner at 8:00 AM UTC+7 (01:00 UTC).
-  - **5-Minute Test Cron**: Enabled for rapid delivery testing.
   - **On-demand by request**: Trigger anytime with `/today` or `/yan`.
 - **Private Bot with Owner-Exclusive Security**:
   - Strictly restricted to owner `@cheytac29` (Chat ID: `1368225736`).
@@ -24,10 +23,10 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers top ani
 | Command | Description |
 | :--- | :--- |
 | `/start` | Welcome and quick start guide |
-| `/today [count] [sfw\|nsfw\|all]` | Fetch top images (defaults to 15, ALL rating) |
+| `/today [count] [sfw\|nsfw\|all]` | Fetch top images (defaults to 30, ALL rating) |
 | `/yan [count] [sfw\|nsfw\|all]` | Shortcut for yande.re top images |
 | `/settings` | Open interactive settings panel |
-| `/limit <1-50>` | Set everyday image count (e.g. `/limit 15`) |
+| `/limit <1-50>` | Set everyday image count (e.g. `/limit 30`) |
 | `/spoiler [on\|off]` | Toggle NSFW spoiler blur on or off |
 | `/unspoiler` | Turn off NSFW spoiler blur (unblur images by default) |
 | `/sfw` | Set rating filter to SFW (Safe only) |
@@ -85,5 +84,5 @@ The daily scheduled triggers are configured in `wrangler.toml`:
 
 ```toml
 [triggers]
-crons = ["0 1 * * *", "*/5 * * * *"] # 8:00 AM UTC+7 daily + 5-minute test cron
+crons = ["0 1 * * *"] # 8:00 AM UTC+7 daily (01:00 UTC)
 ```

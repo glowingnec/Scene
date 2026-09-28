@@ -22,7 +22,7 @@ const DEFAULT_CONFIG = {
   OWNER_USERNAME: "cheytac29",
   OWNER_CHAT_ID: "1368225736",
   DEFAULT_RATING: "all" as RatingFilter,
-  DEFAULT_LIMIT: 15,
+  DEFAULT_LIMIT: 30,
   DEFAULT_SPOILER_NSFW: false,
 };
 
@@ -113,14 +113,14 @@ export async function sendBooruPostsToChat(
   api: TelegramApi,
   chatId: number | string,
   rating: RatingFilter,
-  limit: number = 15,
+  limit: number = 30,
   spoilerNsfw: boolean = false
 ): Promise<void> {
   const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
 
   await api.sendMessage(
     chatId,
-    `⏳ <i>Fetching top ${limit} images from <b>yande.re</b> [${ratingLabel}]...</i>`
+    `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`
   );
 
   try {
@@ -264,12 +264,12 @@ export async function handleTelegramMessage(
         `🌸 <b>Booru Today Bot</b>\n\n` +
           `Daily & on-demand top anime art from <b>yande.re</b>.\n\n` +
           `<b>Available Commands:</b>\n` +
-          `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch top images (defaults to 15, ALL rating)\n` +
+          `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch top images (defaults to 30, ALL rating)\n` +
           `• <code>/yan [count] [sfw|nsfw|all]</code> - Shortcut for yande.re top images\n` +
           `• <code>/settings</code> - Interactive configuration panel\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
           `• <code>/test_cron</code> - Test daily scheduled broadcast right now\n` +
-          `• <code>/limit &lt;1-50&gt;</code> - Set everyday count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/limit &lt;1-50&gt;</code> - Set everyday count (e.g. <code>/limit 30</code>)\n` +
           `• <code>/spoiler [on|off]</code> - Toggle NSFW spoiler blur\n` +
           `• <code>/unspoiler</code> - Unblur images by default\n` +
           `• <code>/sfw</code>, <code>/nsfw</code>, <code>/all</code> - Quick switch rating filter\n` +
@@ -285,13 +285,13 @@ export async function handleTelegramMessage(
         chat.id,
         `📖 <b>Help & Command Reference</b>\n\n` +
           `<b>Fetch Commands:</b>\n` +
-          `• <code>/today [count] [rating]</code> - Pull top images (e.g. <code>/today</code>, <code>/today 20</code>, <code>/today 15 nsfw</code>)\n` +
+          `• <code>/today [count] [rating]</code> - Pull top images (e.g. <code>/today</code>, <code>/today 30</code>, <code>/today 30 nsfw</code>)\n` +
           `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n\n` +
           `<b>Configuration & Schedule:</b>\n` +
           `• <code>/settings</code> - Interactive control panel\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
           `• <code>/test_cron</code> - Trigger daily broadcast test immediately\n` +
-          `• <code>/limit &lt;1-50&gt;</code> - Set everyday count (e.g. <code>/limit 15</code>)\n` +
+          `• <code>/limit &lt;1-50&gt;</code> - Set everyday count (e.g. <code>/limit 30</code>)\n` +
           `• <code>/spoiler [on|off]</code> - Enable or disable spoiler blur\n` +
           `• <code>/unspoiler</code> - Turn off spoiler blur by default\n` +
           `• <code>/sfw</code> - Set default rating to SFW (Safe only)\n` +
@@ -307,6 +307,7 @@ export async function handleTelegramMessage(
     case "/top":
     case "/top10":
     case "/top15":
+    case "/top30":
     case "/yan":
     case "/yandere": {
       const settings = await getSettings(env);

@@ -14,7 +14,7 @@ export function getDefaultSettings(env: Env): BotSettings {
   const rawRating = (env.DEFAULT_RATING || "all").toLowerCase();
   const defaultRating: RatingFilter =
     rawRating === "sfw" ? "sfw" : rawRating === "nsfw" ? "nsfw" : "all";
-  const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : 15;
+  const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : 30;
   const ownerTarget = parseChatTarget(env.OWNER_CHAT_ID || env.CHANNEL_ID) || 1368225736;
   const rawSpoiler = env.DEFAULT_SPOILER_NSFW?.toLowerCase();
   const defaultSpoiler = rawSpoiler === "true" ? true : false;
@@ -22,7 +22,7 @@ export function getDefaultSettings(env: Env): BotSettings {
   return {
     source: "yandere",
     rating: defaultRating,
-    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 50 ? 15 : defaultLimit,
+    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 50 ? 30 : defaultLimit,
     ownerChatId: ownerTarget,
     subscribedChatIds: ownerTarget ? [ownerTarget] : [1368225736],
     spoilerNsfw: defaultSpoiler,

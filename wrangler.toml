@@ -4,9 +4,8 @@ compatibility_date = "2024-09-23"
 
 # Scheduled triggers:
 # - Daily broadcast at 8:00 AM UTC+7 (01:00 UTC)
-# - Test cron: every 1 minute
 [triggers]
-crons = ["0 1 * * *", "* * * * *"]
+crons = ["0 1 * * *"]
 
 [vars]
 # Bot owner username (without @, case-insensitive)
@@ -17,8 +16,8 @@ OWNER_CHAT_ID = "1368225736"
 DEFAULT_SOURCE = "yandere"
 # Default rating filter: "all" (SFW + Questionable + Explicit)
 DEFAULT_RATING = "all"
-# Default everyday image count: 15
-DEFAULT_LIMIT = "15"
+# Default everyday image count: 30
+DEFAULT_LIMIT = "30"
 # NSFW spoilers: "false" (unblurred by default)
 DEFAULT_SPOILER_NSFW = "false"
 
