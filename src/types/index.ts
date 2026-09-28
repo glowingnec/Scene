@@ -1,18 +1,16 @@
-export type BooruSource = "yandere" | "gelbooru";
+export type BooruSource = "yandere";
 export type RatingFilter = "sfw" | "nsfw" | "all";
 
 export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   OWNER_USERNAME?: string;
   OWNER_CHAT_ID?: string;
+  CHANNEL_ID?: string;
   DEFAULT_SOURCE?: string;
   DEFAULT_RATING?: string;
   DEFAULT_LIMIT?: string;
-  RESTRICT_ALL_TO_OWNER?: string;
+  DEFAULT_SPOILER_NSFW?: string;
   SECRET_TOKEN?: string;
-  GELBOORU_USER_ID?: string;
-  GELBOORU_API_KEY?: string;
-  BOORU_KV?: KVNamespace;
 }
 
 export interface BooruPost {
@@ -31,8 +29,8 @@ export interface BotSettings {
   source: BooruSource;
   rating: RatingFilter;
   limit: number;
-  ownerChatId?: number;
-  subscribedChatIds: number[];
+  ownerChatId?: number | string;
+  subscribedChatIds: (number | string)[];
   spoilerNsfw: boolean;
 }
 

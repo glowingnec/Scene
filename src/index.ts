@@ -8,7 +8,7 @@ import {
 
 export default {
   /**
-   * HTTP Webhook & Proxy Handler
+   * HTTP Webhook & Health Check Handler
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -26,44 +26,6 @@ export default {
           headers: { "Content-Type": "application/json" },
         }
       );
-    }
-
-    // High-performance image proxy to ensure reliable media delivery to Telegram
-    if (request.method === "GET" && url.pathname === "/proxy") {
-      const targetUrl = url.searchParams.get("url");
-      if (!targetUrl) return new Response("Missing url parameter", { status: 400 });
-
-      try {
-        const parsed = new URL(targetUrl);
-        const host = parsed.hostname.toLowerCase();
-        if (!host.endsWith("yande.re") && !host.endsWith("gelbooru.com")) {
-          return new Response("Forbidden host", { status: 403 });
-        }
-
-        const referer = host.includes("gelbooru.com") ? "https://gelbooru.com/" : "https://yande.re/";
-
-        const imgRes = await fetch(targetUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": referer,
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-          },
-        });
-
-        if (!imgRes.ok) {
-          return new Response(`Upstream fetch failed: ${imgRes.status}`, { status: imgRes.status });
-        }
-
-        const contentType = imgRes.headers.get("content-type") || "image/jpeg";
-        return new Response(imgRes.body, {
-          headers: {
-            "Content-Type": contentType,
-            "Cache-Control": "public, max-age=86400, s-maxage=86400",
-          },
-        });
-      } catch (err: any) {
-        return new Response(`Proxy error: ${err?.message}`, { status: 500 });
-      }
     }
 
     const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;
@@ -97,7 +59,6 @@ export default {
 
     // Telegram Webhook Handler
     if (request.method === "POST" && (url.pathname === "/webhook" || url.pathname === "/")) {
-      // Validate secret token if configured
       if (env.SECRET_TOKEN) {
         const headerSecret = request.headers.get("x-telegram-bot-api-secret-token");
         if (headerSecret !== env.SECRET_TOKEN) {
@@ -107,13 +68,11 @@ export default {
 
       try {
         const update = (await request.json()) as TelegramUpdate;
-        const workerOrigin = url.origin;
 
-        // Process message asynchronously without blocking Telegram's webhook timeout
         if (update.message) {
-          ctx.waitUntil(handleTelegramMessage(update.message, env, workerOrigin));
+          ctx.waitUntil(handleTelegramMessage(update.message, env));
         } else if (update.callback_query) {
-          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env, workerOrigin));
+          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env));
         }
 
         return new Response(JSON.stringify({ ok: true }), {
@@ -133,7 +92,7 @@ export default {
   },
 
   /**
-   * Cron Scheduled Trigger Handler (Runs daily)
+   * Cron Scheduled Trigger Handler (Runs daily + test intervals)
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     const token = env.TELEGRAM_BOT_TOKEN || (globalThis as any).TELEGRAM_BOT_TOKEN;

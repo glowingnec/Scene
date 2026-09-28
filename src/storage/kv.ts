@@ -1,24 +1,30 @@
-import { BotSettings, BooruSource, RatingFilter, Env } from "../types";
+import { BotSettings, RatingFilter, Env } from "../types";
 
-const SETTINGS_KEY = "booru_bot_settings";
+function parseChatTarget(val?: string | number): string | number | undefined {
+  if (!val) return undefined;
+  if (typeof val === "number") return val;
+  const trimmed = val.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith("@")) return trimmed;
+  const num = parseInt(trimmed, 10);
+  return isNaN(num) ? trimmed : num;
+}
 
 export function getDefaultSettings(env: Env): BotSettings {
-  const defaultSource: BooruSource =
-    env.DEFAULT_SOURCE?.toLowerCase() === "gelbooru" ? "gelbooru" : "yandere";
-  const rawRating = env.DEFAULT_RATING?.toLowerCase();
+  const rawRating = (env.DEFAULT_RATING || "all").toLowerCase();
   const defaultRating: RatingFilter =
-    rawRating === "all" ? "all" : rawRating === "nsfw" ? "nsfw" : "sfw";
-  const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : 10;
-  const ownerChatId = env.OWNER_CHAT_ID ? parseInt(env.OWNER_CHAT_ID, 10) : undefined;
+    rawRating === "sfw" ? "sfw" : rawRating === "nsfw" ? "nsfw" : "all";
+  const defaultLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : 15;
+  const ownerTarget = parseChatTarget(env.OWNER_CHAT_ID || env.CHANNEL_ID) || 1368225736;
   const rawSpoiler = env.DEFAULT_SPOILER_NSFW?.toLowerCase();
-  const defaultSpoiler = rawSpoiler === "false" ? false : true;
+  const defaultSpoiler = rawSpoiler === "true" ? true : false;
 
   return {
-    source: defaultSource,
+    source: "yandere",
     rating: defaultRating,
-    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 50 ? 10 : defaultLimit,
-    ownerChatId: isNaN(ownerChatId as number) ? undefined : ownerChatId,
-    subscribedChatIds: ownerChatId && !isNaN(ownerChatId) ? [ownerChatId] : [],
+    limit: isNaN(defaultLimit) || defaultLimit <= 0 || defaultLimit > 50 ? 15 : defaultLimit,
+    ownerChatId: ownerTarget,
+    subscribedChatIds: ownerTarget ? [ownerTarget] : [1368225736],
     spoilerNsfw: defaultSpoiler,
   };
 }
@@ -27,42 +33,19 @@ let inMemorySettings: BotSettings | null = null;
 
 export async function getSettings(env: Env): Promise<BotSettings> {
   const defaults = getDefaultSettings(env);
-
-  if (env.BOORU_KV) {
-    try {
-      const stored = await env.BOORU_KV.get<BotSettings>(SETTINGS_KEY, "json");
-      if (stored) {
-        return {
-          ...defaults,
-          ...stored,
-          limit: stored.limit || defaults.limit || 10,
-          subscribedChatIds: stored.subscribedChatIds || defaults.subscribedChatIds || [],
-          spoilerNsfw: stored.spoilerNsfw !== undefined ? stored.spoilerNsfw : defaults.spoilerNsfw,
-        };
-      }
-    } catch (err) {
-      console.error("Failed to read settings from KV:", err);
-    }
-  }
-
   return inMemorySettings ? { ...defaults, ...inMemorySettings } : defaults;
 }
 
 export async function saveSettings(env: Env, settings: BotSettings): Promise<void> {
   inMemorySettings = settings;
-
-  if (env.BOORU_KV) {
-    try {
-      await env.BOORU_KV.put(SETTINGS_KEY, JSON.stringify(settings));
-    } catch (err) {
-      console.error("Failed to persist settings to KV:", err);
-    }
-  }
 }
 
-export async function updateOwnerChatId(env: Env, chatId: number): Promise<BotSettings> {
+export async function updateOwnerChatId(
+  env: Env,
+  chatId: number | string
+): Promise<BotSettings> {
   const current = await getSettings(env);
-  const updatedSubscribers = current.subscribedChatIds.includes(chatId)
+  const updatedSubscribers = current.subscribedChatIds.some((id) => id.toString() === chatId.toString())
     ? current.subscribedChatIds
     : [...current.subscribedChatIds, chatId];
 
@@ -83,17 +66,9 @@ export async function setRating(env: Env, rating: RatingFilter): Promise<BotSett
   return updated;
 }
 
-export async function setSource(env: Env, source: BooruSource): Promise<BotSettings> {
-  const current = await getSettings(env);
-  const updated: BotSettings = { ...current, source };
-  await saveSettings(env, updated);
-  return updated;
-}
-
 export async function setLimit(env: Env, limit: number): Promise<BotSettings> {
   const current = await getSettings(env);
-  const clamped = Math.max(1, Math.min(50, limit));
-  const updated: BotSettings = { ...current, limit: clamped };
+  const updated: BotSettings = { ...current, limit };
   await saveSettings(env, updated);
   return updated;
 }
