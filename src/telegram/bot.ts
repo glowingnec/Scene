@@ -163,6 +163,11 @@ export async function sendBooruPostsToChat(
     for (let i = 0; i < mediaGroup.length; i += 10) {
       const batch = mediaGroup.slice(i, i + 10);
 
+      if (i > 0) {
+        // Wait 1.5s between media groups to satisfy Telegram's 1 msg/sec single-chat rate limit
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+
       if (batch.length === 1) {
         const item = batch[0];
         const photoRes = await api.sendPhoto(chatId, item.media, {
@@ -173,12 +178,19 @@ export async function sendBooruPostsToChat(
         if (photoRes.ok) totalSent++;
         else console.warn("sendPhoto for single item failed:", photoRes.description);
       } else {
-        const sendResult = await api.sendMediaGroup(chatId, batch);
+        let sendResult = await api.sendMediaGroup(chatId, batch);
+        if (!sendResult.ok) {
+          console.warn(`sendMediaGroup batch failed (${sendResult.description}), waiting 2s to retry...`);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          sendResult = await api.sendMediaGroup(chatId, batch);
+        }
+
         if (sendResult.ok) {
           totalSent += batch.length;
         } else {
-          console.warn("sendMediaGroup batch failed, falling back to sendPhoto:", sendResult.description);
+          console.warn("sendMediaGroup retry failed, falling back to sendPhoto:", sendResult.description);
           for (const item of batch) {
+            await new Promise((resolve) => setTimeout(resolve, 350));
             const photoRes = await api.sendPhoto(chatId, item.media, {
               caption: item.caption,
               has_spoiler: item.has_spoiler,
