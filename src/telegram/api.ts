@@ -1,5 +1,16 @@
 import { InlineKeyboardMarkup, InputMediaPhoto } from "../types";
 
+export interface TelegramApiResponse<T = any> {
+  ok: boolean;
+  result?: T;
+  description?: string;
+  error_code?: number;
+  parameters?: {
+    retry_after?: number;
+    migrate_to_chat_id?: number;
+  };
+}
+
 export class TelegramApi {
   private baseUrl: string;
 
@@ -15,36 +26,44 @@ export class TelegramApi {
       reply_markup?: InlineKeyboardMarkup;
       disable_web_page_preview?: boolean;
     }
-  ): Promise<{ ok: boolean; result?: any; description?: string }> {
-    const res = await fetch(`${this.baseUrl}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: options?.parse_mode ?? "HTML",
-        reply_markup: options?.reply_markup,
-        disable_web_page_preview: options?.disable_web_page_preview ?? false,
-      }),
-    });
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: options?.parse_mode ?? "HTML",
+          reply_markup: options?.reply_markup,
+          disable_web_page_preview: options?.disable_web_page_preview ?? false,
+        }),
+      });
 
-    return await res.json();
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
   }
 
   async sendMediaGroup(
     chatId: number | string,
     media: InputMediaPhoto[]
-  ): Promise<{ ok: boolean; result?: any; description?: string }> {
-    const res = await fetch(`${this.baseUrl}/sendMediaGroup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        media,
-      }),
-    });
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/sendMediaGroup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          media,
+        }),
+      });
 
-    return await res.json();
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
   }
 
   async sendPhoto(
@@ -55,20 +74,24 @@ export class TelegramApi {
       parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
       has_spoiler?: boolean;
     }
-  ): Promise<{ ok: boolean; result?: any; description?: string }> {
-    const res = await fetch(`${this.baseUrl}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        photo,
-        caption: options?.caption,
-        parse_mode: options?.parse_mode ?? "HTML",
-        has_spoiler: options?.has_spoiler,
-      }),
-    });
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/sendPhoto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo,
+          caption: options?.caption,
+          parse_mode: options?.parse_mode ?? "HTML",
+          has_spoiler: options?.has_spoiler,
+        }),
+      });
 
-    return await res.json();
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
   }
 
   async editMessageText(

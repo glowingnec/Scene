@@ -194,42 +194,54 @@ class TelegramApi {
   }
 
   async sendMessage(chatId, text, options = {}) {
-    const res = await fetch(`${this.baseUrl}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: options.parse_mode ?? "HTML",
-        reply_markup: options.reply_markup,
-        disable_web_page_preview: options.disable_web_page_preview ?? false,
-      }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${this.baseUrl}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: options.parse_mode ?? "HTML",
+          reply_markup: options.reply_markup,
+          disable_web_page_preview: options.disable_web_page_preview ?? false,
+        }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
   }
 
   async sendMediaGroup(chatId, media) {
-    const res = await fetch(`${this.baseUrl}/sendMediaGroup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, media }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${this.baseUrl}/sendMediaGroup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, media }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
   }
 
   async sendPhoto(chatId, photo, options = {}) {
-    const res = await fetch(`${this.baseUrl}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        photo,
-        caption: options.caption,
-        parse_mode: options.parse_mode ?? "HTML",
-        has_spoiler: options.has_spoiler,
-      }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${this.baseUrl}/sendPhoto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo,
+          caption: options.caption,
+          parse_mode: options.parse_mode ?? "HTML",
+          has_spoiler: options.has_spoiler,
+        }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
   }
 
   async answerCallbackQuery(callbackQueryId, text) {
@@ -253,6 +265,92 @@ class TelegramApi {
     });
     return await res.json();
   }
+}
+
+async function sendAlbumBatch(api, chatId, items) {
+  if (items.length === 0) return 0;
+
+  if (items.length === 1) {
+    const item = items[0];
+    let photoRes = await api.sendPhoto(chatId, item.media, {
+      caption: item.caption,
+      has_spoiler: item.has_spoiler,
+      parse_mode: item.parse_mode,
+    });
+
+    if (!photoRes.ok && photoRes.parameters?.retry_after) {
+      const waitMs = (photoRes.parameters.retry_after + 1) * 1000;
+      console.warn(`Single photo hit rate limit. Waiting ${waitMs}ms to retry...`);
+      await new Promise((r) => setTimeout(r, waitMs));
+      photoRes = await api.sendPhoto(chatId, item.media, {
+        caption: item.caption,
+        has_spoiler: item.has_spoiler,
+        parse_mode: item.parse_mode,
+      });
+    }
+
+    return photoRes.ok ? 1 : 0;
+  }
+
+  // 1. Primary: send as media group (album)
+  let sendResult = await api.sendMediaGroup(chatId, items);
+
+  // If rate-limited (429), respect Telegram retry_after parameter; otherwise backoff 2.5s
+  if (!sendResult.ok) {
+    const waitMs = sendResult.parameters?.retry_after
+      ? (sendResult.parameters.retry_after + 1) * 1000
+      : 2500;
+    console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs}ms to retry...`);
+    await new Promise((r) => setTimeout(r, waitMs));
+    sendResult = await api.sendMediaGroup(chatId, items);
+  }
+
+  if (sendResult.ok) {
+    return items.length;
+  }
+
+  // 2. Resilient Fallback: If 4+ items failed, split into two smaller albums so items still arrive bundled
+  if (items.length >= 4) {
+    const mid = Math.ceil(items.length / 2);
+    const sub1 = items.slice(0, mid);
+    const sub2 = items.slice(mid);
+    console.warn(`Album retry failed (${sendResult.description}). Splitting into ${sub1.length} + ${sub2.length} albums...`);
+
+    let sent = 0;
+    await new Promise((r) => setTimeout(r, 2000));
+    sent += await sendAlbumBatch(api, chatId, sub1);
+
+    if (sub2.length > 0) {
+      await new Promise((r) => setTimeout(r, 2500));
+      sent += await sendAlbumBatch(api, chatId, sub2);
+    }
+    return sent;
+  }
+
+  // 3. Last Resort: 2 or 3 items where album was rejected. Send remaining individual valid images spaced by 1000ms.
+  console.warn(`Album of ${items.length} failed (${sendResult.description}). Sending individually as last resort...`);
+  let sent = 0;
+  for (const item of items) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let photoRes = await api.sendPhoto(chatId, item.media, {
+      caption: item.caption,
+      has_spoiler: item.has_spoiler,
+      parse_mode: item.parse_mode,
+    });
+
+    if (!photoRes.ok && photoRes.parameters?.retry_after) {
+      const waitMs = (photoRes.parameters.retry_after + 1) * 1000;
+      await new Promise((r) => setTimeout(r, waitMs));
+      photoRes = await api.sendPhoto(chatId, item.media, {
+        caption: item.caption,
+        has_spoiler: item.has_spoiler,
+        parse_mode: item.parse_mode,
+      });
+    }
+
+    if (photoRes.ok) sent++;
+  }
+  return sent;
 }
 
 async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw = false) {
@@ -295,69 +393,12 @@ async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw
       const batch = mediaGroup.slice(i, i + 10);
 
       if (i > 0) {
-        // Rate-limit safety: 1.5s delay between albums
-        await new Promise((r) => setTimeout(r, 1500));
+        // Wait 2.5s between media groups to satisfy Telegram's single-chat rate limits and image downloads
+        await new Promise((r) => setTimeout(r, 2500));
       }
 
-      if (batch.length === 1) {
-        const item = batch[0];
-        const photoRes = await api.sendPhoto(chatId, item.media, {
-          caption: item.caption,
-          has_spoiler: item.has_spoiler,
-          parse_mode: item.parse_mode,
-        });
-        if (photoRes.ok) totalSent++;
-      } else {
-        let sendResult = await api.sendMediaGroup(chatId, batch);
-        if (!sendResult.ok) {
-          console.warn(`Album batch failed (${sendResult.description}), waiting 1.5s to retry...`);
-          await new Promise((r) => setTimeout(r, 1500));
-          sendResult = await api.sendMediaGroup(chatId, batch);
-        }
-
-        if (sendResult.ok) {
-          totalSent += batch.length;
-        } else {
-          // Fallback: Split into 5+5 albums to avoid Telegram concurrent download timeout
-          console.warn(`Album retry failed (${sendResult.description}), splitting into 5+5 albums...`);
-          const sub1 = batch.slice(0, 5);
-          const sub2 = batch.slice(5);
-
-          await new Promise((r) => setTimeout(r, 1200));
-          const res1 = await api.sendMediaGroup(chatId, sub1);
-          if (res1.ok) {
-            totalSent += sub1.length;
-          } else {
-            for (const item of sub1) {
-              await new Promise((r) => setTimeout(r, 350));
-              const pRes = await api.sendPhoto(chatId, item.media, {
-                caption: item.caption,
-                has_spoiler: item.has_spoiler,
-                parse_mode: item.parse_mode,
-              });
-              if (pRes.ok) totalSent++;
-            }
-          }
-
-          if (sub2.length > 0) {
-            await new Promise((r) => setTimeout(r, 1200));
-            const res2 = await api.sendMediaGroup(chatId, sub2);
-            if (res2.ok) {
-              totalSent += sub2.length;
-            } else {
-              for (const item of sub2) {
-                await new Promise((r) => setTimeout(r, 350));
-                const pRes = await api.sendPhoto(chatId, item.media, {
-                  caption: item.caption,
-                  has_spoiler: item.has_spoiler,
-                  parse_mode: item.parse_mode,
-                });
-                if (pRes.ok) totalSent++;
-              }
-            }
-          }
-        }
-      }
+      const sent = await sendAlbumBatch(api, chatId, batch);
+      totalSent += sent;
     }
 
     if (totalSent === 0) {

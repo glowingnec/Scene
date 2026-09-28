@@ -100,9 +100,105 @@ export function parseCommandArgs(
 }
 
 /**
+ * Sends a batch of InputMediaPhoto items as an album, respecting Telegram's rate limits (429 retry_after)
+ * and gracefully halving the batch if download timeouts occur.
+ */
+async function sendAlbumBatch(
+  api: TelegramApi,
+  chatId: number | string,
+  items: InputMediaPhoto[]
+): Promise<number> {
+  if (items.length === 0) return 0;
+
+  if (items.length === 1) {
+    const item = items[0];
+    let photoRes = await api.sendPhoto(chatId, item.media, {
+      caption: item.caption,
+      has_spoiler: item.has_spoiler,
+      parse_mode: item.parse_mode,
+    });
+
+    if (!photoRes.ok && photoRes.parameters?.retry_after) {
+      const waitMs = (photoRes.parameters.retry_after + 1) * 1000;
+      console.warn(`Single photo hit rate limit. Waiting ${waitMs}ms to retry...`);
+      await new Promise((r) => setTimeout(r, waitMs));
+      photoRes = await api.sendPhoto(chatId, item.media, {
+        caption: item.caption,
+        has_spoiler: item.has_spoiler,
+        parse_mode: item.parse_mode,
+      });
+    }
+
+    return photoRes.ok ? 1 : 0;
+  }
+
+  // 1. Primary: send as media group (album)
+  let sendResult = await api.sendMediaGroup(chatId, items);
+
+  // If rate-limited (429), respect Telegram retry_after parameter; otherwise backoff 2.5s
+  if (!sendResult.ok) {
+    const waitMs = sendResult.parameters?.retry_after
+      ? (sendResult.parameters.retry_after + 1) * 1000
+      : 2500;
+    console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs}ms to retry...`);
+    await new Promise((r) => setTimeout(r, waitMs));
+    sendResult = await api.sendMediaGroup(chatId, items);
+  }
+
+  if (sendResult.ok) {
+    return items.length;
+  }
+
+  // 2. Resilient Fallback: If 4+ items failed (e.g. concurrent download timeout on large images),
+  // split into two smaller albums so items still arrive bundled together!
+  if (items.length >= 4) {
+    const mid = Math.ceil(items.length / 2);
+    const sub1 = items.slice(0, mid);
+    const sub2 = items.slice(mid);
+    console.warn(`Album retry failed (${sendResult.description}). Splitting into ${sub1.length} + ${sub2.length} albums...`);
+
+    let sent = 0;
+    await new Promise((r) => setTimeout(r, 2000));
+    sent += await sendAlbumBatch(api, chatId, sub1);
+
+    if (sub2.length > 0) {
+      await new Promise((r) => setTimeout(r, 2500));
+      sent += await sendAlbumBatch(api, chatId, sub2);
+    }
+    return sent;
+  }
+
+  // 3. Last Resort: 2 or 3 items where album was rejected (likely one item URL is 404/broken on source).
+  // Send remaining individual valid images spaced by 1000ms.
+  console.warn(`Album of ${items.length} failed (${sendResult.description}). Sending individually as last resort...`);
+  let sent = 0;
+  for (const item of items) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let photoRes = await api.sendPhoto(chatId, item.media, {
+      caption: item.caption,
+      has_spoiler: item.has_spoiler,
+      parse_mode: item.parse_mode,
+    });
+
+    if (!photoRes.ok && photoRes.parameters?.retry_after) {
+      const waitMs = (photoRes.parameters.retry_after + 1) * 1000;
+      await new Promise((r) => setTimeout(r, waitMs));
+      photoRes = await api.sendPhoto(chatId, item.media, {
+        caption: item.caption,
+        has_spoiler: item.has_spoiler,
+        parse_mode: item.parse_mode,
+      });
+    }
+
+    if (photoRes.ok) sent++;
+  }
+  return sent;
+}
+
+/**
  * Fetch top images from yande.re and send them grouped as Telegram albums.
- * Uses 1.5s pacing between albums to prevent Telegram rate-limiting,
- * and falls back to 5+5 albums if Telegram times out downloading 10 images concurrently.
+ * Uses 2.5s pacing between albums to prevent Telegram rate-limiting,
+ * respects retry_after headers, and falls back to gracefully halved albums if Telegram times out.
  */
 export async function sendBooruPostsToChat(
   api: TelegramApi,
@@ -158,70 +254,12 @@ export async function sendBooruPostsToChat(
       const batch = mediaGroup.slice(i, i + 10);
 
       if (i > 0) {
-        // Wait 1.5s between media groups to satisfy Telegram's single-chat rate limit (1 msg/sec)
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        // Wait 2.5s between media groups to satisfy Telegram's single-chat rate limits and image downloads
+        await new Promise((resolve) => setTimeout(resolve, 2500));
       }
 
-      if (batch.length === 1) {
-        const item = batch[0];
-        const photoRes = await api.sendPhoto(chatId, item.media, {
-          caption: item.caption,
-          has_spoiler: item.has_spoiler,
-          parse_mode: item.parse_mode,
-        });
-        if (photoRes.ok) totalSent++;
-      } else {
-        // 1. Primary: send 10-image album
-        let sendResult = await api.sendMediaGroup(chatId, batch);
-        if (!sendResult.ok) {
-          console.warn(`Album batch failed (${sendResult.description}), waiting 1.5s to retry...`);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          sendResult = await api.sendMediaGroup(chatId, batch);
-        }
-
-        if (sendResult.ok) {
-          totalSent += batch.length;
-        } else {
-          // 2. Resilient Fallback: split into two 5-image albums to avoid Telegram concurrent download timeouts
-          console.warn(`Album retry failed (${sendResult.description}), splitting into 5+5 albums...`);
-          const subBatch1 = batch.slice(0, 5);
-          const subBatch2 = batch.slice(5);
-
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-          const res1 = await api.sendMediaGroup(chatId, subBatch1);
-          if (res1.ok) {
-            totalSent += subBatch1.length;
-          } else {
-            for (const item of subBatch1) {
-              await new Promise((resolve) => setTimeout(resolve, 350));
-              const photoRes = await api.sendPhoto(chatId, item.media, {
-                caption: item.caption,
-                has_spoiler: item.has_spoiler,
-                parse_mode: item.parse_mode,
-              });
-              if (photoRes.ok) totalSent++;
-            }
-          }
-
-          if (subBatch2.length > 0) {
-            await new Promise((resolve) => setTimeout(resolve, 1200));
-            const res2 = await api.sendMediaGroup(chatId, subBatch2);
-            if (res2.ok) {
-              totalSent += subBatch2.length;
-            } else {
-              for (const item of subBatch2) {
-                await new Promise((resolve) => setTimeout(resolve, 350));
-                const photoRes = await api.sendPhoto(chatId, item.media, {
-                  caption: item.caption,
-                  has_spoiler: item.has_spoiler,
-                  parse_mode: item.parse_mode,
-                });
-                if (photoRes.ok) totalSent++;
-              }
-            }
-          }
-        }
-      }
+      const sent = await sendAlbumBatch(api, chatId, batch);
+      totalSent += sent;
     }
 
     // Emergency fallback if all photos were rejected
