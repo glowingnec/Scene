@@ -755,6 +755,22 @@ export default {
       }
     }
 
+    // HTTP endpoint to manually trigger scheduled broadcast test: GET /test-scheduled
+    if (request.method === "GET" && (url.pathname === "/test-scheduled" || url.pathname === "/cron")) {
+      try {
+        const result = await handleScheduledBroadcast(env);
+        return new Response(
+          JSON.stringify({ ok: true, message: result, timestamp: new Date().toISOString() }, null, 2),
+          { headers: { "Content-Type": "application/json" } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({ ok: false, error: err.message }, null, 2),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     return new Response("Not Found", { status: 404 });
   },
 
@@ -764,6 +780,12 @@ export default {
       console.error("TELEGRAM_BOT_TOKEN not configured in scheduled cron execution.");
       return;
     }
-    ctx.waitUntil(handleScheduledBroadcast(env));
+    try {
+      console.log(`Cron trigger fired: ${event.cron}`);
+      const res = await handleScheduledBroadcast(env);
+      console.log(`Cron execution completed: ${res}`);
+    } catch (err) {
+      console.error("Cron execution failed:", err);
+    }
   },
 };
