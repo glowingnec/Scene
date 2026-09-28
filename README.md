@@ -1,20 +1,24 @@
-# 🌸 Booru Today Telegram Bot (Cloudflare Workers)
+# 🌸 Scene (Cloudflare Workers Telegram Bot)
 
-A serverless Telegram bot hosted on **Cloudflare Workers** that delivers top anime art from **yande.re**, both on-demand and automatically every day via cron triggers.
+A serverless Telegram bot hosted on **Cloudflare Workers** delivering top daily anime art from **yande.re**, both on-demand and automatically every day at 8:00 AM UTC+7.
 
-## ✨ Features
+---
 
-- **Top Daily Anime Art**: Pulls the highest scoring art from **yande.re**.
+## ✨ Features & Architecture
+
+- **Clean & Fast**: Runs entirely on Cloudflare Workers edge runtime with zero database/KV required.
+- **Source**: Exclusively fetches highest scoring anime art from **yande.re**.
 - **Defaults**:
   - **Rating:** ALL (SFW + Questionable + Explicit)
-  - **Count:** 30 images (batched into media groups of 10)
+  - **Count:** 30 images
   - **Spoilers:** OFF (Unblurred by default)
+  - **Batching:** 10-image albums with intelligent 5+5 sub-album fallback on timeout.
 - **Delivery Modes**:
-  - **Every day automatically**: Scheduled Cloudflare Cron Trigger sends daily art to the owner at 8:00 AM UTC+7 (01:00 UTC).
-  - **On-demand by request**: Trigger anytime with `/today` or `/yan`.
-- **Private Bot with Owner-Exclusive Security**:
-  - Strictly restricted to owner `@cheytac29` (Chat ID: `1368225736`).
-  - Non-owners are denied with: `Access Denied: You don't have permission`.
+  - **Daily at 8:00 AM UTC+7 (01:00 UTC)** via Cloudflare Cron Trigger.
+  - **On-demand** via `/today` or `/yan` commands.
+- **Strict Owner-Only Access**:
+  - Exclusively restricted to `@cheytac29` (Chat ID: `1368225736`).
+  - Unauthorized users receive `Access Denied: You don't have permission`.
 
 ---
 
@@ -25,64 +29,85 @@ A serverless Telegram bot hosted on **Cloudflare Workers** that delivers top ani
 | `/start` | Welcome and quick start guide |
 | `/today [count] [sfw\|nsfw\|all]` | Fetch top images (defaults to 30, ALL rating) |
 | `/yan [count] [sfw\|nsfw\|all]` | Shortcut for yande.re top images |
-| `/settings` | Open interactive settings panel |
-| `/limit <1-50>` | Set everyday image count (e.g. `/limit 30`) |
-| `/spoiler [on\|off]` | Toggle NSFW spoiler blur on or off |
-| `/unspoiler` | Turn off NSFW spoiler blur (unblur images by default) |
-| `/sfw` | Set rating filter to SFW (Safe only) |
-| `/nsfw` | Set rating filter to NSFW (Questionable / Explicit) |
-| `/all` | Set rating filter to BOTH (SFW + NSFW) |
+| `/settings` | View active configuration and quick-action buttons |
 | `/myid` | View your Telegram Chat ID (`1368225736`) |
-| `/test_cron` | Test the scheduled broadcast immediately in chat |
-| `/subscribe` | Register chat for daily 8:00 AM delivery |
-| `/unsubscribe` | Cancel daily delivery |
+| `/test_cron` | Test the 8:00 AM scheduled delivery immediately |
 | `/help` | Command reference |
 
 ---
 
-## 🚀 Deployment Guide to Cloudflare Workers
+## ⚙️ Runtime Variables (Cloudflare Dashboard)
 
-### 1. Prerequisites
+Configure defaults directly in Cloudflare Dashboard under **Workers & Pages ➔ [Your Worker] ➔ Settings ➔ Variables**:
 
-1. A **Telegram Bot Token** from [@BotFather](https://t.me/BotFather).
-2. A free [Cloudflare Account](https://dash.cloudflare.com/).
-3. Node.js & npm installed on your deployment machine.
+| Variable | Type | Recommended Value | Description |
+| :--- | :--- | :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | Secret | `your_bot_token` | Token from [@BotFather](https://t.me/BotFather) |
+| `OWNER_USERNAME` | Variable | `cheytac29` | Your Telegram username |
+| `OWNER_CHAT_ID` | Variable | `1368225736` | Your numeric Telegram ID |
+| `DEFAULT_LIMIT` | Variable | `30` | Default number of images |
+| `DEFAULT_RATING` | Variable | `all` | `all`, `sfw`, or `nsfw` |
+| `DEFAULT_SPOILER_NSFW` | Variable | `false` | `false` = unblurred, `true` = blurred |
+| `DEFAULT_SOURCE` | Variable | `yandere` | Default booru source |
 
 ---
 
-### 2. Configure Cloudflare Workers Secrets
+## 🚀 Fresh Setup Guide (For New Repo / Bot)
 
-In this project directory, run:
+### Step 1: Create Your Bot on Telegram
+1. Message [@BotFather](https://t.me/BotFather) on Telegram.
+2. Send `/newbot`, choose a name and username.
+3. Save the **Bot Token** (e.g. `123456789:ABCdef...`).
 
-```bash
-# Log in to your Cloudflare account
-npx wrangler login
+### Step 2: Deploy to Cloudflare Workers
 
-# Set your Telegram bot token (required)
-npx wrangler secret put TELEGRAM_BOT_TOKEN
-# (Paste your token when prompted)
+#### Option A: Via GitHub Integration
+1. Push this repository to GitHub.
+2. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) ➔ **Workers & Pages** ➔ **Create application** ➔ **Connect to Git**.
+3. Select your repository.
+4. Add the variables from the table above.
+5. Deploy!
+
+#### Option B: Standalone Paste (Zero Git)
+1. In Cloudflare Dashboard, click **Create Worker**.
+2. Click **Quick Edit** in the browser.
+3. Paste the contents of `worker.js`.
+4. Click **Save and Deploy**.
+5. Go to **Settings ➔ Variables** and add `TELEGRAM_BOT_TOKEN`, `OWNER_CHAT_ID`, etc.
+
+### Step 3: Register Telegram Webhook
+Open in your browser:
+```
+https://<your-worker-subdomain>.workers.dev/setup-webhook
+```
+You will receive:
+```json
+{
+  "configured_url": "https://<your-worker-subdomain>.workers.dev/webhook",
+  "telegram_response": { "ok": true, "result": true, "description": "Webhook was set" }
+}
 ```
 
+### Step 4: Verify Cron Trigger
+In Cloudflare Dashboard under **Settings ➔ Triggers ➔ Cron Triggers**:
+- Ensure `0 1 * * *` (01:00 UTC = 8:00 AM UTC+7) is listed.
+
 ---
 
-### 3. Deploy to Cloudflare Workers
+## 🛠️ Project Structure
 
-Deploy the worker with:
-
-```bash
-npx wrangler deploy
 ```
-
-Once deployed, visit your worker URL to register the webhook:
-`https://<your-worker>.<subdomain>.workers.dev/setup-webhook`
-
----
-
-### 4. Scheduled Daily Trigger
-
-The daily scheduled triggers are configured in `wrangler.toml`:
-
-```toml
-[triggers]
-crons = ["0 1 * * *"] # 8:00 AM UTC+7 daily (01:00 UTC)
+├── src/
+│   ├── config.ts         # Runtime configuration from Cloudflare env
+│   ├── types/index.ts    # TypeScript definitions
+│   ├── services/
+│   │   ├── yandere.ts    # yande.re popular_by_day & search API
+│   │   └── booru.ts      # Booru service abstraction
+│   ├── telegram/
+│   │   ├── api.ts        # Telegram Bot API client
+│   │   └── bot.ts        # Command router, album batching & rate limit handling
+│   └── index.ts          # Cloudflare Worker entry (fetch & scheduled)
+├── worker.js             # Standalone all-in-one file (optional single-file deploy)
+├── wrangler.toml         # Cloudflare Worker configuration
+└── README.md
 ```

@@ -1,7 +1,7 @@
 {
-  "name": "booru-today-bot",
+  "name": "scene",
   "version": "1.0.0",
-  "description": "Telegram bot hosted on Cloudflare Workers delivering daily/on-demand top 10 images from Danbooru or yande.re with SFW/NSFW toggles and owner controls.",
+  "description": "Telegram bot hosted on Cloudflare Workers delivering daily top anime art from yande.re.",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
@@ -11,10 +11,9 @@
   "keywords": [
     "cloudflare-workers",
     "telegram-bot",
-    "danbooru",
     "yandere",
     "anime",
-    "booru"
+    "scene"
   ],
   "author": "cheytac29",
   "license": "MIT",

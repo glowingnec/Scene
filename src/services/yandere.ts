@@ -23,7 +23,7 @@ interface YandereRawPost {
 
 export async function fetchYanderePosts(
   ratingFilter: RatingFilter,
-  limit: number = 10
+  limit: number = 30
 ): Promise<BooruPost[]> {
   let rawPosts: YandereRawPost[] = [];
 
