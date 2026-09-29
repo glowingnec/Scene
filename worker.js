@@ -451,16 +451,12 @@ class TelegramApi {
     }
   }
 
-  async setChatMenuButton(chatId, menuButton = { type: "commands" }) {
+  async setChatMenuButton(menuButton = { type: "commands" }) {
     try {
-      const payload = { menu_button: menuButton };
-      if (chatId) {
-        payload.chat_id = chatId;
-      }
       const res = await fetch(`${this.baseUrl}/setChatMenuButton`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ menu_button: menuButton }),
       });
       return await res.json();
     } catch (err) {
@@ -815,8 +811,7 @@ async function handleTelegramMessage(message, env) {
   switch (cmd) {
     case "/start": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
-      await api.setChatMenuButton(chat.id, { type: "commands" });
-      await api.setChatMenuButton(undefined, { type: "commands" });
+      await api.setChatMenuButton({ type: "commands" });
 
       await api.sendMessage(
         chat.id,
@@ -876,7 +871,7 @@ async function handleTelegramMessage(message, env) {
     case "/panel":
     case "/config": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
-      await api.setChatMenuButton(chat.id, { type: "commands" });
+      await api.setChatMenuButton({ type: "commands" });
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [
