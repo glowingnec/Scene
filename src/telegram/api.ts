@@ -169,4 +169,35 @@ export class TelegramApi {
       return { ok: false, description: err?.message || "Network request failed" };
     }
   }
+
+  async setMyCommands(
+    commands: { command: string; description: string }[]
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/setMyCommands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commands }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
+
+  async setChatMenuButton(
+    menuButton: { type: string } = { type: "commands" }
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/setChatMenuButton`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ menu_button: menuButton }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
 }
+

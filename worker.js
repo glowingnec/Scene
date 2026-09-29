@@ -437,6 +437,32 @@ class TelegramApi {
       return { ok: false, description: err?.message || "Network error" };
     }
   }
+
+  async setMyCommands(commands) {
+    try {
+      const res = await fetch(`${this.baseUrl}/setMyCommands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commands }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
+  }
+
+  async setChatMenuButton(menuButton = { type: "commands" }) {
+    try {
+      const res = await fetch(`${this.baseUrl}/setChatMenuButton`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ menu_button: menuButton }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
+  }
 }
 
 async function sendAlbumBatch(api, chatId, items) {
@@ -757,6 +783,14 @@ function parseCommandArgs(args, defaultRating, defaultLimit, defaultSpoiler = fa
   return { rating, limit, spoilerNsfw };
 }
 
+const DEFAULT_BOT_COMMANDS = [
+  { command: "today", description: "🌟 Top popular images of the day" },
+  { command: "random", description: "🎲 Random anime images" },
+  { command: "settings", description: "⚙️ Configuration & quick panel" },
+  { command: "myid", description: "🆔 Your Telegram Chat ID" },
+  { command: "help", description: "📖 Help & command reference" },
+];
+
 async function handleTelegramMessage(message, env) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
@@ -776,6 +810,9 @@ async function handleTelegramMessage(message, env) {
 
   switch (cmd) {
     case "/start": {
+      await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      await api.setChatMenuButton({ type: "commands" });
+
       await api.sendMessage(
         chat.id,
         `🌸 <b>Scene</b>\n\n` +
@@ -786,7 +823,8 @@ async function handleTelegramMessage(message, env) {
           `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n` +
           `• <code>/settings</code> - View active configuration\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
-          `• <code>/help</code> - Command reference`
+          `• <code>/help</code> - Command reference\n\n` +
+          `💡 <i>Tap the <b>[Menu]</b> button on the left of your message box for instant quick access to all commands!</i>`
       );
       break;
     }
@@ -828,9 +866,12 @@ async function handleTelegramMessage(message, env) {
       break;
     }
 
+    case "/menu":
     case "/settings":
     case "/panel":
     case "/config": {
+      await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      await api.setChatMenuButton({ type: "commands" });
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [
@@ -952,10 +993,33 @@ export default {
       if (!token) return new Response("Error: TELEGRAM_BOT_TOKEN is not set.", { status: 500 });
       const webhookUrl = `${url.origin}/webhook`;
       const api = new TelegramApi(token);
-      const res = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
-      return new Response(JSON.stringify({ configured_url: webhookUrl, telegram_response: res }, null, 2), {
-        headers: { "Content-Type": "application/json" },
-      });
+      const webhookRes = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
+      const commandsRes = await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      const menuRes = await api.setChatMenuButton({ type: "commands" });
+      return new Response(
+        JSON.stringify(
+          {
+            configured_url: webhookUrl,
+            webhook: webhookRes,
+            commands: commandsRes,
+            menu_button: menuRes,
+          },
+          null,
+          2
+        ),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (request.method === "GET" && (url.pathname === "/setup-commands" || url.pathname === "/set-menu")) {
+      if (!token) return new Response("Error: TELEGRAM_BOT_TOKEN is not set.", { status: 500 });
+      const api = new TelegramApi(token);
+      const commandsRes = await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      const menuRes = await api.setChatMenuButton({ type: "commands" });
+      return new Response(
+        JSON.stringify({ commands: commandsRes, menu_button: menuRes }, null, 2),
+        { headers: { "Content-Type": "application/json" } }
+      );
     }
 
     if (request.method === "POST" && (url.pathname === "/webhook" || url.pathname === "/")) {

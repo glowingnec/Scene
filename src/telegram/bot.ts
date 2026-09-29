@@ -441,6 +441,14 @@ export async function sendBooruPostsToChat(
   }
 }
 
+export const DEFAULT_BOT_COMMANDS = [
+  { command: "today", description: "🌟 Top popular images of the day" },
+  { command: "random", description: "🎲 Random anime images" },
+  { command: "settings", description: "⚙️ Configuration & quick panel" },
+  { command: "myid", description: "🆔 Your Telegram Chat ID" },
+  { command: "help", description: "📖 Help & command reference" },
+];
+
 /**
  * Telegram Message Router
  */
@@ -466,6 +474,10 @@ export async function handleTelegramMessage(
 
   switch (cmd) {
     case "/start": {
+      // Auto-register command list and Menu button in Telegram UI
+      await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      await api.setChatMenuButton({ type: "commands" });
+
       await api.sendMessage(
         chat.id,
         `🌸 <b>Scene</b>\n\n` +
@@ -476,7 +488,8 @@ export async function handleTelegramMessage(
           `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n` +
           `• <code>/settings</code> - View active configuration\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
-          `• <code>/help</code> - Command reference`
+          `• <code>/help</code> - Command reference\n\n` +
+          `💡 <i>Tap the <b>[Menu]</b> button on the left of your message box for instant quick access to all commands!</i>`
       );
       break;
     }
@@ -532,9 +545,12 @@ export async function handleTelegramMessage(
       break;
     }
 
+    case "/menu":
     case "/settings":
     case "/panel":
     case "/config": {
+      await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      await api.setChatMenuButton({ type: "commands" });
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [

@@ -4,6 +4,7 @@ import {
   handleTelegramMessage,
   handleTelegramCallbackQuery,
   handleScheduledBroadcast,
+  DEFAULT_BOT_COMMANDS,
 } from "./telegram/bot";
 
 export default {
@@ -29,7 +30,7 @@ export default {
 
     const token = env.TELEGRAM_BOT_TOKEN;
 
-    // Helper endpoint to register webhook: GET /setup-webhook
+    // Helper endpoint to register webhook and menu commands: GET /setup-webhook
     if (request.method === "GET" && url.pathname === "/setup-webhook") {
       if (!token) {
         return new Response("Error: TELEGRAM_BOT_TOKEN environment variable/secret is not set.", {
@@ -39,10 +40,37 @@ export default {
 
       const webhookUrl = `${url.origin}/webhook`;
       const api = new TelegramApi(token);
-      const res = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
+      const webhookRes = await api.setWebhook(webhookUrl, env.SECRET_TOKEN);
+      const commandsRes = await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      const menuRes = await api.setChatMenuButton({ type: "commands" });
 
       return new Response(
-        JSON.stringify({ configured_url: webhookUrl, telegram_response: res }, null, 2),
+        JSON.stringify(
+          {
+            configured_url: webhookUrl,
+            webhook: webhookRes,
+            commands: commandsRes,
+            menu_button: menuRes,
+          },
+          null,
+          2
+        ),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Helper endpoint to set up bot menu commands: GET /setup-commands
+    if (request.method === "GET" && (url.pathname === "/setup-commands" || url.pathname === "/set-menu")) {
+      if (!token) {
+        return new Response("Error: TELEGRAM_BOT_TOKEN environment variable/secret is not set.", {
+          status: 500,
+        });
+      }
+      const api = new TelegramApi(token);
+      const commandsRes = await api.setMyCommands(DEFAULT_BOT_COMMANDS);
+      const menuRes = await api.setChatMenuButton({ type: "commands" });
+      return new Response(
+        JSON.stringify({ commands: commandsRes, menu_button: menuRes }, null, 2),
         { headers: { "Content-Type": "application/json" } }
       );
     }
