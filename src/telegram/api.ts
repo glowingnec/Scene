@@ -186,13 +186,18 @@ export class TelegramApi {
   }
 
   async setChatMenuButton(
+    chatId?: number | string,
     menuButton: { type: string } = { type: "commands" }
   ): Promise<TelegramApiResponse> {
     try {
+      const payload: Record<string, any> = { menu_button: menuButton };
+      if (chatId) {
+        payload.chat_id = chatId;
+      }
       const res = await fetch(`${this.baseUrl}/setChatMenuButton`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ menu_button: menuButton }),
+        body: JSON.stringify(payload),
       });
       return await res.json();
     } catch (err: any) {

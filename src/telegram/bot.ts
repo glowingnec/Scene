@@ -476,7 +476,8 @@ export async function handleTelegramMessage(
     case "/start": {
       // Auto-register command list and Menu button in Telegram UI
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
-      await api.setChatMenuButton({ type: "commands" });
+      await api.setChatMenuButton(chat.id, { type: "commands" });
+      await api.setChatMenuButton(undefined, { type: "commands" });
 
       await api.sendMessage(
         chat.id,
@@ -550,7 +551,7 @@ export async function handleTelegramMessage(
     case "/panel":
     case "/config": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
-      await api.setChatMenuButton({ type: "commands" });
+      await api.setChatMenuButton(chat.id, { type: "commands" });
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [
