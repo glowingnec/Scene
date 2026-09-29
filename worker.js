@@ -292,46 +292,69 @@ async function sendAlbumBatch(api, chatId, items) {
     return photoRes.ok ? 1 : 0;
   }
 
-  // 1. Primary: send as media group (album)
+  // 1. Primary: send as media group (album) with up to 2 retries (progressive backoff)
   let sendResult = await api.sendMediaGroup(chatId, items);
 
-  // If rate-limited (429), respect Telegram retry_after parameter; otherwise backoff 2.5s
   if (!sendResult.ok) {
-    const waitMs = sendResult.parameters?.retry_after
+    const waitMs1 = sendResult.parameters?.retry_after
       ? (sendResult.parameters.retry_after + 1) * 1000
-      : 2500;
-    console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs}ms to retry...`);
-    await new Promise((r) => setTimeout(r, waitMs));
+      : 3500;
+    console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs1}ms for retry 1...`);
+    await new Promise((r) => setTimeout(r, waitMs1));
     sendResult = await api.sendMediaGroup(chatId, items);
+
+    if (!sendResult.ok) {
+      const waitMs2 = sendResult.parameters?.retry_after
+        ? (sendResult.parameters.retry_after + 1) * 1000
+        : 4500;
+      console.warn(`Album batch retry 1 failed (${sendResult.description}). Waiting ${waitMs2}ms for retry 2...`);
+      await new Promise((r) => setTimeout(r, waitMs2));
+      sendResult = await api.sendMediaGroup(chatId, items);
+    }
   }
 
   if (sendResult.ok) {
     return items.length;
   }
 
-  // 2. Resilient Fallback: If 4+ items failed, split into two smaller albums so items still arrive bundled
+  // 2. Resilient Fallback for 4+ items: split into two smaller balanced albums (e.g. 10 -> 5+5, 5 -> 3+2, 4 -> 2+2)
   if (items.length >= 4) {
     const mid = Math.ceil(items.length / 2);
     const sub1 = items.slice(0, mid);
     const sub2 = items.slice(mid);
-    console.warn(`Album retry failed (${sendResult.description}). Splitting into ${sub1.length} + ${sub2.length} albums...`);
+    console.warn(`Album batch of ${items.length} failed retries (${sendResult.description}). Splitting into ${sub1.length} + ${sub2.length} albums...`);
 
     let sent = 0;
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2500));
     sent += await sendAlbumBatch(api, chatId, sub1);
 
     if (sub2.length > 0) {
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 3000));
       sent += await sendAlbumBatch(api, chatId, sub2);
     }
     return sent;
   }
 
-  // 3. Last Resort: 2 or 3 items where album was rejected. Send remaining individual valid images spaced by 1000ms.
-  console.warn(`Album of ${items.length} failed (${sendResult.description}). Sending individually as last resort...`);
+  // 3. Graceful Fallback for 3 items: split into 2-item album + 1 single photo so 2 items stay bundled
+  if (items.length === 3) {
+    console.warn(`3-item album failed retries (${sendResult.description}). Splitting into 2-item album + 1 photo...`);
+    const pair = items.slice(0, 2);
+    const single = items.slice(2);
+
+    let sent = 0;
+    sent += await sendAlbumBatch(api, chatId, pair);
+
+    await new Promise((r) => setTimeout(r, 2000));
+    sent += await sendAlbumBatch(api, chatId, single);
+    return sent;
+  }
+
+  // 4. Last Resort for 2 items that persistently failed as an album (one URL is genuinely broken/404 on source):
+  // Send individual valid photos spaced by 1200ms.
+  console.warn(`2-item album failed retries (${sendResult.description}). Sending individually as last resort...`);
   let sent = 0;
   for (const item of items) {
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1200));
     let photoRes = await api.sendPhoto(chatId, item.media, {
       caption: item.caption,
       has_spoiler: item.has_spoiler,
@@ -393,8 +416,8 @@ async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw
       const batch = mediaGroup.slice(i, i + 10);
 
       if (i > 0) {
-        // Wait 2.5s between media groups to satisfy Telegram's single-chat rate limits and image downloads
-        await new Promise((r) => setTimeout(r, 2500));
+        // Wait 3.5s between media groups to satisfy Telegram's media download queue & single-chat pacing
+        await new Promise((r) => setTimeout(r, 3500));
       }
 
       const sent = await sendAlbumBatch(api, chatId, batch);
