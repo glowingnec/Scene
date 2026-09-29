@@ -11,6 +11,7 @@ interface YandereRawPost {
   tags?: string;
   created_at?: number;
   author?: string;
+  source?: string;
   score?: number;
   rating?: string; // 's' (safe), 'q' (questionable), 'e' (explicit)
   file_url?: string;
@@ -115,9 +116,10 @@ export async function fetchYanderePosts(
       source: "yandere",
       imageUrl,
       postUrl: `https://yande.re/post/show/${post.id}`,
+      sourceUrl: post.source?.trim() || undefined,
       rating,
       isNsfw,
-      tags: (post.tags || "").split(" ").slice(0, 15),
+      tags: (post.tags || "").split(" ").filter(Boolean),
       artist: post.author,
       score: post.score || 0,
     });

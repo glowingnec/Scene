@@ -18,6 +18,7 @@ export interface BooruPost {
   source: BooruSource;
   imageUrl: string;
   postUrl: string;
+  sourceUrl?: string;
   rating: string;
   isNsfw: boolean;
   tags: string[];

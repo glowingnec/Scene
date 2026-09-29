@@ -217,6 +217,114 @@ async function sendAlbumBatch(
   return sent;
 }
 
+const GENERAL_TAGS = new Set([
+  "solo", "1girl", "2girls", "3girls", "4girls", "multiple_girls", "1boy", "2boys", "multiple_boys", "male", "female",
+  "looking_at_viewer", "smile", "smiling", "open_mouth", "closed_eyes", "blush", "blushing", "tears", "crying", "wink",
+  "profile", "wide_shot", "close_up", "upper_body", "lower_body", "full_body", "cowboy_shot", "back", "from_behind",
+  "sitting", "standing", "lying", "on_bed", "on_stomach", "on_back", "upside_down", "kneeling", "squatting", "cross_legged", "all_fours", "hands_up", "arms_behind_back",
+  "breasts", "boobs", "small_breasts", "medium_breasts", "large_breasts", "huge_breasts", "cleavage", "bare_shoulders", "navel", "stomach", "midriff", "thighs", "thick_thighs", "bare_legs", "legs", "barefoot", "feet",
+  "ass", "butt", "pussy", "cameltoe", "nipples", "erect_nipples", "censored", "uncensored", "mosaic_censored", "cum", "pussy_juice", "penis", "sex", "anal", "bondage",
+  "thighhighs", "thigh_highs", "stockings", "socks", "pantyhose", "tights", "black_pantyhose", "white_thighhighs", "black_thighhighs", "torn_thighhighs", "fishnets", "fishnet_pantyhose", "garter", "garter_belt", "shoes", "boots", "heels", "high_heels",
+  "leotard", "swimsuit", "swimsuits", "bikini", "bikini_top", "bikini_bottom", "micro_bikini", "sling_bikini", "one_piece_swimsuit", "competition_swimsuit",
+  "dress", "black_dress", "white_dress", "red_dress", "wedding_dress", "skirt", "mini_skirt", "pleated_skirt", "skirt_lift", "shirt_lift", "leotard_pull",
+  "pantsu", "panties", "underwear", "black_panties", "white_panties", "striped_panties", "no_bra", "no_panties", "nopan", "bra", "topless", "bottomless", "naked", "nude", "lingerie",
+  "uniform", "seifuku", "sailor_suit", "school_uniform", "gym_uniform", "bloomers", "maid", "maid_apron", "aprons", "apron", "wa_maid",
+  "bunny_girl", "bunny_ears", "bunny_suit", "rabbit_ears", "cat_ears", "nekomimi", "animal_ears", "dog_ears", "wolf_ears", "fox_ears", "kitsunemimi", "tail", "animal_tail", "cat_tail", "fox_tail", "wings", "angel_wings", "devil_wings", "bat_wings", "horns", "halo",
+  "bandaid", "bandage", "glasses", "megane", "sunglasses", "choker", "collar", "ribbon", "hair_ribbon", "bow", "hair_bow", "gloves",
+  "long_hair", "short_hair", "medium_hair", "twintails", "twin_tails", "ponytail", "side_ponytail", "braid", "braids", "bangs", "ahoge", "hair_ornament", "hair_flower", "hairclip",
+  "blonde_hair", "black_hair", "brown_hair", "blue_hair", "red_hair", "pink_hair", "white_hair", "silver_hair", "green_hair", "purple_hair", "grey_hair", "multicolored_hair", "gradient_hair",
+  "blue_eyes", "brown_eyes", "green_eyes", "red_eyes", "yellow_eyes", "purple_eyes", "pink_eyes", "amber_eyes", "heterochromia",
+  "wet", "sweating", "sweat", "food", "drink", "outdoors", "indoors", "bedroom", "beach", "pool", "sky", "clouds", "simple_background", "white_background", "transparent_background", "monochrome", "sepia",
+  "highres", "absurdres", "incredible_absurdres", "wallpaper", "widescreen", "scan", "scans", "official_art", "tagme", "duplicate", "bad_id", "comic", "manga", "text", "watermark", "sample", "parody", "crossover", "original", "original_character",
+  "sweater", "torn_clothes", "see_through", "pointy_ears", "point_ears", "chibi", "dress_lift", "breast_hold", "vibrator", "dildo", "sex_toy", "anus", "saliva", "drool"
+]);
+
+function toTitleCase(tag: string): string {
+  const clean = tag.replace(/_\([^)]+\)$/, "");
+  return clean
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function getSourcePlatform(url?: string): string | null {
+  if (!url) return null;
+  const u = url.toLowerCase();
+  if (u.includes("pixiv.net")) return "Pixiv";
+  if (u.includes("twitter.com") || u.includes("x.com")) return "X (Twitter)";
+  if (u.includes("fanbox.cc")) return "Fanbox";
+  if (u.includes("fantia.jp")) return "Fantia";
+  if (u.includes("dlsite.com")) return "DLsite";
+  if (u.includes("bilibili.com")) return "Bilibili";
+  return "Source";
+}
+
+function formatPostCaption(
+  post: BooruPost,
+  index: number,
+  displayCount: number,
+  todayDate: string
+): string {
+  const isFirst = index === 0;
+  let caption = "";
+  if (isFirst) {
+    caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
+  }
+
+  // Line 1: #27 Score: 18 (yande.re link)
+  caption += `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">yande.re</a>)`;
+
+  // Line 2: Character (Copyright) / by: Source
+  const nonGeneralTags = (post.tags || []).filter(
+    (t) => !GENERAL_TAGS.has(t.toLowerCase())
+  );
+
+  const charTags: string[] = [];
+  const copyTags: string[] = [];
+
+  const KNOWN_FRANCHISES = [
+    "genshin", "blue_archive", "zenless", "idolm", "wuthering", "honkai",
+    "touhou", "azur_lane", "arknights", "yani_neko", "kairakuten", "seitokai",
+    "fate", "vocaloid", "pokemon", "chainsaw_man", "hololive", "nijisanji", "appetite"
+  ];
+
+  for (const t of nonGeneralTags) {
+    const parentheticalMatch = t.match(/_\(([^)]+)\)$/);
+    if (parentheticalMatch) {
+      charTags.push(t);
+      copyTags.push(parentheticalMatch[1]);
+    } else if (KNOWN_FRANCHISES.some((f) => t.toLowerCase().includes(f))) {
+      copyTags.push(t);
+    } else {
+      charTags.push(t);
+    }
+  }
+
+  const charStr = charTags.slice(0, 2).map(toTitleCase).join(", ");
+  const copyStr = copyTags.slice(0, 1).map(toTitleCase).join("");
+
+  let tagLine = "";
+  if (charStr && copyStr) {
+    tagLine = `${escapeHtml(charStr)} (${escapeHtml(copyStr)})`;
+  } else if (charStr) {
+    tagLine = escapeHtml(charStr);
+  } else if (copyStr) {
+    tagLine = `(${escapeHtml(copyStr)})`;
+  }
+
+  const platform = getSourcePlatform(post.sourceUrl);
+  let byPart = "";
+  if (post.sourceUrl && platform) {
+    byPart = ` / by: <a href="${escapeHtml(post.sourceUrl)}">${platform}</a>`;
+  }
+
+  if (tagLine || byPart) {
+    caption += `\n${tagLine}${byPart}`.trim();
+  }
+
+  return caption;
+}
+
 /**
  * Fetch top images from yande.re and send them grouped as Telegram albums.
  * Uses 3.5s pacing between albums to prevent Telegram media queue congestion,
@@ -229,8 +337,6 @@ export async function sendBooruPostsToChat(
   limit: number = 30,
   spoilerNsfw: boolean = false
 ): Promise<void> {
-  const ratingLabel = rating === "all" ? "SFW+NSFW" : rating.toUpperCase();
-
   await api.sendMessage(
     chatId,
     `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`
@@ -241,7 +347,7 @@ export async function sendBooruPostsToChat(
     if (posts.length === 0) {
       await api.sendMessage(
         chatId,
-        `⚠️ No images found matching rating <b>${ratingLabel}</b> on yande.re today.`
+        `⚠️ No images found on yande.re today.`
       );
       return;
     }
@@ -250,15 +356,7 @@ export async function sendBooruPostsToChat(
     const displayCount = Math.min(posts.length, limit);
 
     const mediaGroup: InputMediaPhoto[] = posts.slice(0, displayCount).map((post, idx) => {
-      const isFirst = idx === 0;
-      let caption = "";
-      if (isFirst) {
-        caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
-      }
-      const ratingBadge = post.isNsfw ? "⚠️ NSFW" : "🛡️ SFW";
-      const artistStr = post.artist ? ` • 🎨 ${escapeHtml(post.artist)}` : "";
-      caption += `#${idx + 1} <b>Score:</b> ${post.score} (${ratingBadge})${artistStr}\n🔗 <a href="${post.postUrl}">View on yande.re</a>`;
-
+      const caption = formatPostCaption(post, idx, displayCount, todayDate);
       return {
         type: "photo",
         media: post.imageUrl,
@@ -286,9 +384,9 @@ export async function sendBooruPostsToChat(
 
     // Emergency fallback if all photos were rejected
     if (totalSent === 0) {
-      let textSummary = `🌟 <b>Top ${displayCount} Today • yande.re</b> [${ratingLabel}]\n📅 ${todayDate}\n\n`;
+      let textSummary = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
       posts.slice(0, displayCount).forEach((p, i) => {
-        textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score} [${p.rating.toUpperCase()}]\n`;
+        textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score}\n`;
       });
       await api.sendMessage(chatId, textSummary, { disable_web_page_preview: false });
     }
@@ -335,7 +433,6 @@ export async function handleTelegramMessage(
           `• <code>/yan [count] [sfw|nsfw|all]</code> - Shortcut for yande.re\n` +
           `• <code>/settings</code> - View active configuration\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
-          `• <code>/test_cron</code> - Test daily 8:00 AM delivery right now\n` +
           `• <code>/help</code> - Command reference`
       );
       break;
@@ -350,8 +447,7 @@ export async function handleTelegramMessage(
           `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n\n` +
           `<b>Info & Diagnostics:</b>\n` +
           `• <code>/settings</code> - Inspect active environment variables\n` +
-          `• <code>/myid</code> - View your Telegram Chat ID\n` +
-          `• <code>/test_cron</code> - Run the scheduled broadcast immediately in chat`
+          `• <code>/myid</code> - View your Telegram Chat ID`
       );
       break;
     }
@@ -362,7 +458,10 @@ export async function handleTelegramMessage(
     case "/top15":
     case "/top30":
     case "/yan":
-    case "/yandere": {
+    case "/yandere":
+    case "/test_cron":
+    case "/runcron":
+    case "/cron": {
       const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw);
       await sendBooruPostsToChat(
         api,
@@ -381,7 +480,6 @@ export async function handleTelegramMessage(
         reply_markup: {
           inline_keyboard: [
             [{ text: `🚀 Fetch Top ${config.limit} Now`, callback_data: "fetch_top" }],
-            [{ text: `⏰ Test 8:00 AM Delivery Now`, callback_data: "test_cron" }],
             [
               { text: "🛡️ Top 10 SFW", callback_data: "fetch_sfw" },
               { text: "⚠️ Top 10 NSFW", callback_data: "fetch_nsfw" },
@@ -399,28 +497,8 @@ export async function handleTelegramMessage(
         chat.id,
         `🆔 <b>Your Telegram Chat ID:</b> <code>${chat.id}</code>\n` +
           `👤 <b>Username:</b> @${from?.username || "unknown"}\n\n` +
-          `✅ <b>Configured Owner:</b> <code>${config.ownerChatId}</code>\n\n` +
-          `💡 <i>You can run <code>/test_cron</code> to test the scheduled broadcast immediately!</i>`
+          `✅ <b>Configured Owner:</b> <code>${config.ownerChatId}</code>`
       );
-      break;
-    }
-
-    case "/test_cron":
-    case "/runcron":
-    case "/cron": {
-      await api.sendMessage(
-        chat.id,
-        `⏰ <b>Testing Daily Scheduled Cron:</b>\n\n` +
-          `• <b>Chat ID:</b> <code>${chat.id}</code>\n` +
-          `• <b>Source:</b> <code>yande.re</code>\n` +
-          `• <b>Rating:</b> <code>${config.rating}</code>\n` +
-          `• <b>Count:</b> <code>${config.limit} images</code>\n` +
-          `• <b>Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-          `<i>Executing broadcast now...</i>`
-      );
-
-      const resultMsg = await handleScheduledBroadcast(env);
-      await api.sendMessage(chat.id, `🏁 <b>Cron test finished:</b> ${resultMsg}`);
       break;
     }
 
@@ -465,13 +543,6 @@ export async function handleTelegramCallbackQuery(
         config.limit,
         config.spoilerNsfw
       );
-      break;
-    }
-
-    case "test_cron": {
-      await api.answerCallbackQuery(callbackQuery.id, "Testing daily delivery...");
-      const result = await handleScheduledBroadcast(env);
-      await api.sendMessage(msg.chat.id, `🏁 <b>Cron test result:</b> ${result}`);
       break;
     }
 
