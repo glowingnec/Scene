@@ -1,4 +1,4 @@
-import { Env, RatingFilter, BotSettings } from "./types";
+import { Env, RatingFilter, DeliveryMode, BotSettings } from "./types";
 
 export const DEFAULT_CONFIG = {
   OWNER_USERNAME: "cheytac29",
@@ -6,6 +6,7 @@ export const DEFAULT_CONFIG = {
   DEFAULT_SOURCE: "yandere" as const,
   DEFAULT_RATING: "all" as RatingFilter,
   DEFAULT_LIMIT: 30,
+  DEFAULT_MODE: "top" as DeliveryMode,
   DEFAULT_SPOILER_NSFW: false,
 };
 
@@ -33,6 +34,9 @@ export function getConfig(env: Env): BotSettings {
     : DEFAULT_CONFIG.DEFAULT_LIMIT;
   const limit = isNaN(rawLimit) || rawLimit < 1 || rawLimit > 50 ? 30 : rawLimit;
 
+  const rawMode = (env.DEFAULT_MODE || env.DELIVERY_MODE || DEFAULT_CONFIG.DEFAULT_MODE).toLowerCase();
+  const mode: DeliveryMode = rawMode === "random" ? "random" : "top";
+
   const rawSpoiler = (env.DEFAULT_SPOILER_NSFW || "").toLowerCase();
   const spoilerNsfw = rawSpoiler === "true";
 
@@ -42,6 +46,7 @@ export function getConfig(env: Env): BotSettings {
   return {
     source: "yandere",
     rating,
+    mode,
     limit,
     ownerChatId,
     subscribedChatIds: [ownerChatId],

@@ -1,4 +1,4 @@
-import { BooruPost, RatingFilter } from "../types";
+import { BooruPost, DeliveryMode, RatingFilter } from "../types";
 
 const YANDERE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -24,56 +24,18 @@ interface YandereRawPost {
 
 export async function fetchYanderePosts(
   ratingFilter: RatingFilter,
-  limit: number = 30
+  limit: number = 30,
+  mode: DeliveryMode = "top"
 ): Promise<BooruPost[]> {
   let rawPosts: YandereRawPost[] = [];
 
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth() + 1;
-  const day = now.getUTCDate();
-
-  // Primary: popular by current day
-  try {
-    const popularUrl = `https://yande.re/post/popular_by_day.json?year=${year}&month=${month}&day=${day}`;
-    const res = await fetch(popularUrl, { headers: YANDERE_HEADERS });
-    if (res.ok) {
-      const data = (await res.json()) as YandereRawPost[];
-      if (Array.isArray(data) && data.length > 0) {
-        rawPosts = data;
-      }
-    }
-  } catch (err) {
-    console.warn("yande.re popular_by_day request error:", err);
-  }
-
-  // If empty or early in day, query yesterday as well
-  if (rawPosts.length < limit) {
-    try {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const yUrl = `https://yande.re/post/popular_by_day.json?year=${yesterday.getUTCFullYear()}&month=${
-        yesterday.getUTCMonth() + 1
-      }&day=${yesterday.getUTCDate()}`;
-      const res = await fetch(yUrl, { headers: YANDERE_HEADERS });
-      if (res.ok) {
-        const data = (await res.json()) as YandereRawPost[];
-        if (Array.isArray(data) && data.length > 0) {
-          rawPosts = [...rawPosts, ...data];
-        }
-      }
-    } catch (err) {
-      console.warn("yande.re yesterday popular request error:", err);
-    }
-  }
-
-  // Fallback: search by score
-  if (rawPosts.length === 0) {
+  if (mode === "random") {
     try {
       let ratingTag = "";
       if (ratingFilter === "sfw") ratingTag = "rating:s";
       else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
 
-      const searchTags = ["order:score", ratingTag].filter(Boolean).join(" ");
+      const searchTags = ["order:random", ratingTag].filter(Boolean).join(" ");
       const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(
         searchTags
       )}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
@@ -85,7 +47,68 @@ export async function fetchYanderePosts(
         }
       }
     } catch (err) {
-      console.error("yande.re search fallback error:", err);
+      console.error("yande.re random fetch error:", err);
+    }
+  } else {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth() + 1;
+    const day = now.getUTCDate();
+
+    // Primary: popular by current day
+    try {
+      const popularUrl = `https://yande.re/post/popular_by_day.json?year=${year}&month=${month}&day=${day}`;
+      const res = await fetch(popularUrl, { headers: YANDERE_HEADERS });
+      if (res.ok) {
+        const data = (await res.json()) as YandereRawPost[];
+        if (Array.isArray(data) && data.length > 0) {
+          rawPosts = data;
+        }
+      }
+    } catch (err) {
+      console.warn("yande.re popular_by_day request error:", err);
+    }
+
+    // If empty or early in day, query yesterday as well
+    if (rawPosts.length < limit) {
+      try {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const yUrl = `https://yande.re/post/popular_by_day.json?year=${yesterday.getUTCFullYear()}&month=${
+          yesterday.getUTCMonth() + 1
+        }&day=${yesterday.getUTCDate()}`;
+        const res = await fetch(yUrl, { headers: YANDERE_HEADERS });
+        if (res.ok) {
+          const data = (await res.json()) as YandereRawPost[];
+          if (Array.isArray(data) && data.length > 0) {
+            rawPosts = [...rawPosts, ...data];
+          }
+        }
+      } catch (err) {
+        console.warn("yande.re yesterday popular request error:", err);
+      }
+    }
+
+    // Fallback: search by score
+    if (rawPosts.length === 0) {
+      try {
+        let ratingTag = "";
+        if (ratingFilter === "sfw") ratingTag = "rating:s";
+        else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
+
+        const searchTags = ["order:score", ratingTag].filter(Boolean).join(" ");
+        const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(
+          searchTags
+        )}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
+        const res = await fetch(searchUrl, { headers: YANDERE_HEADERS });
+        if (res.ok) {
+          const data = (await res.json()) as YandereRawPost[];
+          if (Array.isArray(data)) {
+            rawPosts = data;
+          }
+        }
+      } catch (err) {
+        console.error("yande.re search fallback error:", err);
+      }
     }
   }
 

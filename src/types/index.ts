@@ -1,5 +1,6 @@
 export type BooruSource = "yandere";
 export type RatingFilter = "sfw" | "nsfw" | "all";
+export type DeliveryMode = "top" | "random";
 
 export interface Env {
   TELEGRAM_BOT_TOKEN: string;
@@ -9,6 +10,8 @@ export interface Env {
   DEFAULT_SOURCE?: string;
   DEFAULT_RATING?: string;
   DEFAULT_LIMIT?: string;
+  DEFAULT_MODE?: string;
+  DELIVERY_MODE?: string;
   DEFAULT_SPOILER_NSFW?: string;
   SECRET_TOKEN?: string;
 }
@@ -31,6 +34,7 @@ export interface BooruPost {
 export interface BotSettings {
   source: BooruSource;
   rating: RatingFilter;
+  mode: DeliveryMode;
   limit: number;
   ownerChatId?: number | string;
   subscribedChatIds: (number | string)[];

@@ -1,6 +1,7 @@
 import {
   Env,
   RatingFilter,
+  DeliveryMode,
   BotSettings,
   TelegramMessage,
   TelegramCallbackQuery,
@@ -53,16 +54,18 @@ function getRatingBadgeText(rating: RatingFilter): string {
 function formatSettingsText(config: BotSettings): string {
   const spoilerText = config.spoilerNsfw ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
   const targetText = config.ownerChatId ? `<code>${config.ownerChatId}</code>` : "<code>1368225736</code>";
+  const modeText = config.mode === "random" ? "Random Images 🎲" : "Top Popular Today 🌟";
 
   return (
     `⚙️ <b>Active Bot Configuration</b>\n\n` +
     `• <b>Source:</b> <code>yande.re</code>\n` +
+    `• <b>Delivery Mode:</b> <code>${modeText}</code>\n` +
     `• <b>Default Rating:</b> <code>${getRatingBadgeText(config.rating)}</code>\n` +
     `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
     `• <b>Everyday Count:</b> <code>${config.limit} images</code>\n` +
     `• <b>Delivery Target:</b> ${targetText}\n` +
     `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables).</i>`
+    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables). Set <code>DEFAULT_MODE</code> to <code>top</code> or <code>random</code>.</i>`
   );
 }
 
@@ -295,12 +298,18 @@ function formatPostCaption(
   post: BooruPost,
   index: number,
   displayCount: number,
-  todayDate: string
+  todayDate: string,
+  mode: DeliveryMode = "top"
 ): string {
   const isFirst = index === 0;
-  let caption = isFirst
-    ? `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`
-    : "";
+  let caption = "";
+  if (isFirst) {
+    if (mode === "random") {
+      caption = `🎲 <b>${displayCount} Random Images • yande.re</b>\n\n`;
+    } else {
+      caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
+    }
+  }
 
   // Line 1: #11 Score: 6 (yande.re)
   caption += `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">yande.re</a>)`;
@@ -347,7 +356,7 @@ function formatPostCaption(
 }
 
 /**
- * Fetch top images from yande.re and send them grouped as Telegram albums.
+ * Fetch images from yande.re (top popular or random) and send them grouped as Telegram albums.
  * Uses 3.5s pacing between albums to prevent Telegram media queue congestion,
  * respects retry_after headers, and provides progressive retries and graceful splitting.
  */
@@ -356,11 +365,13 @@ export async function sendBooruPostsToChat(
   chatId: number | string,
   rating: RatingFilter,
   limit: number = 30,
-  spoilerNsfw: boolean = false
+  spoilerNsfw: boolean = false,
+  mode: DeliveryMode = "top"
 ): Promise<void> {
+  const modeLabel = mode === "random" ? "random" : "top";
   const loadingRes = await api.sendMessage(
     chatId,
-    `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`
+    `⏳ <i>Fetching ${limit} ${modeLabel} images from <b>yande.re</b>...</i>`
   );
   const loadingMsgId =
     loadingRes.ok && loadingRes.result?.message_id
@@ -368,11 +379,11 @@ export async function sendBooruPostsToChat(
       : null;
 
   try {
-    const posts = await fetchYanderePosts(rating, limit);
+    const posts = await fetchYanderePosts(rating, limit, mode);
     if (posts.length === 0) {
       await api.sendMessage(
         chatId,
-        `⚠️ No images found on yande.re today.`
+        `⚠️ No images found on yande.re.`
       );
       return;
     }
@@ -381,7 +392,7 @@ export async function sendBooruPostsToChat(
     const displayCount = Math.min(posts.length, limit);
 
     const mediaGroup: InputMediaPhoto[] = posts.slice(0, displayCount).map((post, idx) => {
-      const caption = formatPostCaption(post, idx, displayCount, todayDate);
+      const caption = formatPostCaption(post, idx, displayCount, todayDate, mode);
       return {
         type: "photo",
         media: post.imageUrl,
@@ -409,7 +420,9 @@ export async function sendBooruPostsToChat(
 
     // Emergency fallback if all photos were rejected
     if (totalSent === 0) {
-      let textSummary = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
+      let textSummary = mode === "random"
+        ? `🎲 <b>${displayCount} Random Images • yande.re</b>\n\n`
+        : `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
       posts.slice(0, displayCount).forEach((p, i) => {
         textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score}\n`;
       });
@@ -456,10 +469,11 @@ export async function handleTelegramMessage(
       await api.sendMessage(
         chat.id,
         `🌸 <b>Scene</b>\n\n` +
-          `Daily & on-demand top anime art from <b>yande.re</b>.\n\n` +
+          `Daily & on-demand anime art from <b>yande.re</b>.\n\n` +
           `<b>Available Commands:</b>\n` +
-          `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch top images (defaults to ${config.limit}, ALL rating)\n` +
-          `• <code>/yan [count] [sfw|nsfw|all]</code> - Shortcut for yande.re\n` +
+          `• <code>/today [count] [rating]</code> - Fetch top images (defaults to ${config.limit})\n` +
+          `• <code>/random [count] [rating]</code> - Fetch random images\n` +
+          `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n` +
           `• <code>/settings</code> - View active configuration\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
           `• <code>/help</code> - Command reference`
@@ -473,10 +487,25 @@ export async function handleTelegramMessage(
         `📖 <b>Help & Command Reference</b>\n\n` +
           `<b>Fetch Commands:</b>\n` +
           `• <code>/today [count] [rating]</code> - Pull top images (e.g. <code>/today</code>, <code>/today 15</code>, <code>/today 30 nsfw</code>)\n` +
+          `• <code>/random [count] [rating]</code> - Pull random images (e.g. <code>/random</code>, <code>/random 30 sfw</code>)\n` +
           `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n\n` +
           `<b>Info & Diagnostics:</b>\n` +
           `• <code>/settings</code> - Inspect active environment variables\n` +
           `• <code>/myid</code> - View your Telegram Chat ID`
+      );
+      break;
+    }
+
+    case "/random":
+    case "/rand": {
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        parsed.rating,
+        parsed.limit,
+        parsed.spoilerNsfw,
+        "random"
       );
       break;
     }
@@ -497,7 +526,8 @@ export async function handleTelegramMessage(
         chat.id,
         parsed.rating,
         parsed.limit,
-        parsed.spoilerNsfw
+        parsed.spoilerNsfw,
+        "top"
       );
       break;
     }
@@ -508,7 +538,10 @@ export async function handleTelegramMessage(
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: `🚀 Fetch Top ${config.limit} Now`, callback_data: "fetch_top" }],
+            [
+              { text: `🚀 Top ${config.limit}`, callback_data: "fetch_top" },
+              { text: `🎲 Random ${config.limit}`, callback_data: "fetch_random" },
+            ],
             [
               { text: "🛡️ Top 10 SFW", callback_data: "fetch_sfw" },
               { text: "⚠️ Top 10 NSFW", callback_data: "fetch_nsfw" },
@@ -536,7 +569,7 @@ export async function handleTelegramMessage(
       if (text.startsWith("/")) {
         await api.sendMessage(
           chat.id,
-          `ℹ️ Unknown command: <code>${escapeHtml(cmd)}</code>\nUse /today to fetch images or /help for commands.`
+          `ℹ️ Unknown command: <code>${escapeHtml(cmd)}</code>\nUse /today or /random to fetch images, or /help for commands.`
         );
       }
       break;
@@ -570,20 +603,34 @@ export async function handleTelegramCallbackQuery(
         msg.chat.id,
         config.rating,
         config.limit,
-        config.spoilerNsfw
+        config.spoilerNsfw,
+        "top"
+      );
+      break;
+    }
+
+    case "fetch_random": {
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} random images...`);
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        "random"
       );
       break;
     }
 
     case "fetch_sfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 SFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false);
+      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top");
       break;
     }
 
     case "fetch_nsfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 NSFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw);
+      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top");
       break;
     }
 
@@ -594,7 +641,7 @@ export async function handleTelegramCallbackQuery(
 
 /**
  * Daily Scheduled Broadcast Execution.
- * Pushes top anime art from yande.re directly to the owner at 8:00 AM UTC+7.
+ * Pushes anime art from yande.re directly to the owner at 8:00 AM UTC+7 (follows DEFAULT_MODE).
  */
 export async function handleScheduledBroadcast(env: Env): Promise<string> {
   const token = env.TELEGRAM_BOT_TOKEN;
@@ -613,7 +660,8 @@ export async function handleScheduledBroadcast(env: Env): Promise<string> {
         chatId,
         config.rating,
         config.limit,
-        config.spoilerNsfw
+        config.spoilerNsfw,
+        config.mode
       );
       sentCount++;
     } catch (err) {

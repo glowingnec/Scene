@@ -15,6 +15,7 @@ const DEFAULT_CONFIG = {
   DEFAULT_SOURCE: "yandere",
   DEFAULT_RATING: "all",
   DEFAULT_LIMIT: 30,
+  DEFAULT_MODE: "top",
   DEFAULT_SPOILER_NSFW: false,
 };
 
@@ -41,6 +42,9 @@ function getConfig(env) {
   const rawLimit = env.DEFAULT_LIMIT ? parseInt(env.DEFAULT_LIMIT, 10) : DEFAULT_CONFIG.DEFAULT_LIMIT;
   const limit = isNaN(rawLimit) || rawLimit < 1 || rawLimit > 50 ? 30 : rawLimit;
 
+  const rawMode = (env.DEFAULT_MODE || env.DELIVERY_MODE || DEFAULT_CONFIG.DEFAULT_MODE).toLowerCase();
+  const mode = rawMode === "random" ? "random" : "top";
+
   const rawSpoiler = (env.DEFAULT_SPOILER_NSFW || "").toLowerCase();
   const spoilerNsfw = rawSpoiler === "true";
 
@@ -49,6 +53,7 @@ function getConfig(env) {
   return {
     source: "yandere",
     rating,
+    mode,
     limit,
     ownerChatId,
     subscribedChatIds: [ownerChatId],
@@ -84,62 +89,31 @@ function getRatingBadgeText(rating) {
 function formatSettingsText(config) {
   const spoilerText = config.spoilerNsfw ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
   const targetText = config.ownerChatId ? `<code>${config.ownerChatId}</code>` : "<code>1368225736</code>";
+  const modeText = config.mode === "random" ? "Random Images 🎲" : "Top Popular Today 🌟";
 
   return (
     `⚙️ <b>Active Bot Configuration</b>\n\n` +
     `• <b>Source:</b> <code>yande.re</code>\n` +
+    `• <b>Delivery Mode:</b> <code>${modeText}</code>\n` +
     `• <b>Default Rating:</b> <code>${getRatingBadgeText(config.rating)}</code>\n` +
     `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
     `• <b>Everyday Count:</b> <code>${config.limit} images</code>\n` +
     `• <b>Delivery Target:</b> ${targetText}\n` +
     `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables).</i>`
+    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables). Set <code>DEFAULT_MODE</code> to <code>top</code> or <code>random</code>.</i>`
   );
 }
 
-async function fetchYanderePosts(ratingFilter, limit = 30) {
+async function fetchYanderePosts(ratingFilter, limit = 30, mode = "top") {
   let rawPosts = [];
 
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth() + 1;
-  const day = now.getUTCDate();
-
-  // 1. Primary: popular by current day
-  try {
-    const popularUrl = `https://yande.re/post/popular_by_day.json?year=${year}&month=${month}&day=${day}`;
-    const res = await fetch(popularUrl, { headers: YANDERE_HEADERS });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) rawPosts = data;
-    }
-  } catch (err) {
-    console.warn("yande.re popular_by_day request error:", err);
-  }
-
-  // 2. Query yesterday if today is early
-  if (rawPosts.length < limit) {
-    try {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const yUrl = `https://yande.re/post/popular_by_day.json?year=${yesterday.getUTCFullYear()}&month=${yesterday.getUTCMonth() + 1}&day=${yesterday.getUTCDate()}`;
-      const res = await fetch(yUrl, { headers: YANDERE_HEADERS });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) rawPosts = [...rawPosts, ...data];
-      }
-    } catch (err) {
-      console.warn("yande.re yesterday popular request error:", err);
-    }
-  }
-
-  // 3. Fallback: search by score
-  if (rawPosts.length === 0) {
+  if (mode === "random") {
     try {
       let ratingTag = "";
       if (ratingFilter === "sfw") ratingTag = "rating:s";
       else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
 
-      const searchTags = ["order:score", ratingTag].filter(Boolean).join(" ");
+      const searchTags = ["order:random", ratingTag].filter(Boolean).join(" ");
       const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(searchTags)}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
       const res = await fetch(searchUrl, { headers: YANDERE_HEADERS });
       if (res.ok) {
@@ -147,7 +121,58 @@ async function fetchYanderePosts(ratingFilter, limit = 30) {
         if (Array.isArray(data)) rawPosts = data;
       }
     } catch (err) {
-      console.error("yande.re search fallback error:", err);
+      console.error("yande.re random fetch error:", err);
+    }
+  } else {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth() + 1;
+    const day = now.getUTCDate();
+
+    // 1. Primary: popular by current day
+    try {
+      const popularUrl = `https://yande.re/post/popular_by_day.json?year=${year}&month=${month}&day=${day}`;
+      const res = await fetch(popularUrl, { headers: YANDERE_HEADERS });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) rawPosts = data;
+      }
+    } catch (err) {
+      console.warn("yande.re popular_by_day request error:", err);
+    }
+
+    // 2. Query yesterday if today is early
+    if (rawPosts.length < limit) {
+      try {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const yUrl = `https://yande.re/post/popular_by_day.json?year=${yesterday.getUTCFullYear()}&month=${yesterday.getUTCMonth() + 1}&day=${yesterday.getUTCDate()}`;
+        const res = await fetch(yUrl, { headers: YANDERE_HEADERS });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) rawPosts = [...rawPosts, ...data];
+        }
+      } catch (err) {
+        console.warn("yande.re yesterday popular request error:", err);
+      }
+    }
+
+    // 3. Fallback: search by score
+    if (rawPosts.length === 0) {
+      try {
+        let ratingTag = "";
+        if (ratingFilter === "sfw") ratingTag = "rating:s";
+        else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
+
+        const searchTags = ["order:score", ratingTag].filter(Boolean).join(" ");
+        const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(searchTags)}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
+        const res = await fetch(searchUrl, { headers: YANDERE_HEADERS });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) rawPosts = data;
+        }
+      } catch (err) {
+        console.error("yande.re search fallback error:", err);
+      }
     }
   }
 
@@ -597,11 +622,16 @@ function getSourcePlatform(url) {
   return "Source";
 }
 
-function formatPostCaption(post, index, displayCount, todayDate) {
+function formatPostCaption(post, index, displayCount, todayDate, mode = "top") {
   const isFirst = index === 0;
-  let caption = isFirst
-    ? `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`
-    : "";
+  let caption = "";
+  if (isFirst) {
+    if (mode === "random") {
+      caption = `🎲 <b>${displayCount} Random Images • yande.re</b>\n\n`;
+    } else {
+      caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
+    }
+  }
 
   // Line 1: #11 Score: 6 (yande.re)
   caption += `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">yande.re</a>)`;
@@ -647,14 +677,15 @@ function formatPostCaption(post, index, displayCount, todayDate) {
   return caption;
 }
 
-async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw = false) {
-  const loadingRes = await api.sendMessage(chatId, `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`);
+async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw = false, mode = "top") {
+  const modeLabel = mode === "random" ? "random" : "top";
+  const loadingRes = await api.sendMessage(chatId, `⏳ <i>Fetching ${limit} ${modeLabel} images from <b>yande.re</b>...</i>`);
   const loadingMsgId = loadingRes && loadingRes.ok && loadingRes.result && loadingRes.result.message_id ? loadingRes.result.message_id : null;
 
   try {
-    const posts = await fetchYanderePosts(rating, limit);
+    const posts = await fetchYanderePosts(rating, limit, mode);
     if (posts.length === 0) {
-      await api.sendMessage(chatId, `⚠️ No images found on yande.re today.`);
+      await api.sendMessage(chatId, `⚠️ No images found on yande.re.`);
       return;
     }
 
@@ -662,7 +693,7 @@ async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw
     const displayCount = Math.min(posts.length, limit);
 
     const mediaGroup = posts.slice(0, displayCount).map((post, idx) => {
-      const caption = formatPostCaption(post, idx, displayCount, todayDate);
+      const caption = formatPostCaption(post, idx, displayCount, todayDate, mode);
       return {
         type: "photo",
         media: post.imageUrl,
@@ -687,7 +718,9 @@ async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw
     }
 
     if (totalSent === 0) {
-      let textSummary = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
+      let textSummary = mode === "random"
+        ? `🎲 <b>${displayCount} Random Images • yande.re</b>\n\n`
+        : `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
       posts.slice(0, displayCount).forEach((p, i) => {
         textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score}\n`;
       });
@@ -746,10 +779,11 @@ async function handleTelegramMessage(message, env) {
       await api.sendMessage(
         chat.id,
         `🌸 <b>Scene</b>\n\n` +
-          `Daily & on-demand top anime art from <b>yande.re</b>.\n\n` +
+          `Daily & on-demand anime art from <b>yande.re</b>.\n\n` +
           `<b>Available Commands:</b>\n` +
-          `• <code>/today [count] [sfw|nsfw|all]</code> - Fetch top images (defaults to ${config.limit}, ALL rating)\n` +
-          `• <code>/yan [count] [sfw|nsfw|all]</code> - Shortcut for yande.re\n` +
+          `• <code>/today [count] [rating]</code> - Fetch top images (defaults to ${config.limit})\n` +
+          `• <code>/random [count] [rating]</code> - Fetch random images\n` +
+          `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n` +
           `• <code>/settings</code> - View active configuration\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
           `• <code>/help</code> - Command reference`
@@ -763,11 +797,19 @@ async function handleTelegramMessage(message, env) {
         `📖 <b>Help & Command Reference</b>\n\n` +
           `<b>Fetch Commands:</b>\n` +
           `• <code>/today [count] [rating]</code> - Pull top images (e.g. <code>/today</code>, <code>/today 15</code>, <code>/today 30 nsfw</code>)\n` +
+          `• <code>/random [count] [rating]</code> - Pull random images (e.g. <code>/random</code>, <code>/random 30 sfw</code>)\n` +
           `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n\n` +
           `<b>Info & Diagnostics:</b>\n` +
           `• <code>/settings</code> - Inspect active environment variables\n` +
           `• <code>/myid</code> - View your Telegram Chat ID`
       );
+      break;
+    }
+
+    case "/random":
+    case "/rand": {
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw);
+      await sendBooruPostsToChat(api, chat.id, parsed.rating, parsed.limit, parsed.spoilerNsfw, "random");
       break;
     }
 
@@ -782,7 +824,7 @@ async function handleTelegramMessage(message, env) {
     case "/runcron":
     case "/cron": {
       const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw);
-      await sendBooruPostsToChat(api, chat.id, parsed.rating, parsed.limit, parsed.spoilerNsfw);
+      await sendBooruPostsToChat(api, chat.id, parsed.rating, parsed.limit, parsed.spoilerNsfw, "top");
       break;
     }
 
@@ -792,7 +834,10 @@ async function handleTelegramMessage(message, env) {
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: `🚀 Fetch Top ${config.limit} Now`, callback_data: "fetch_top" }],
+            [
+              { text: `🚀 Top ${config.limit}`, callback_data: "fetch_top" },
+              { text: `🎲 Random ${config.limit}`, callback_data: "fetch_random" },
+            ],
             [
               { text: "🛡️ Top 10 SFW", callback_data: "fetch_sfw" },
               { text: "⚠️ Top 10 NSFW", callback_data: "fetch_nsfw" },
@@ -817,7 +862,7 @@ async function handleTelegramMessage(message, env) {
 
     default:
       if (text.startsWith("/")) {
-        await api.sendMessage(chat.id, `ℹ️ Unknown command: <code>${escapeHtml(cmd)}</code>\nUse /today to fetch images or /help for commands.`);
+        await api.sendMessage(chat.id, `ℹ️ Unknown command: <code>${escapeHtml(cmd)}</code>\nUse /today or /random to fetch images, or /help for commands.`);
       }
       break;
   }
@@ -839,17 +884,22 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
   switch (callbackQuery.data) {
     case "fetch_top": {
       await api.answerCallbackQuery(callbackQuery.id, `Fetching top ${config.limit}...`);
-      await sendBooruPostsToChat(api, msg.chat.id, config.rating, config.limit, config.spoilerNsfw);
+      await sendBooruPostsToChat(api, msg.chat.id, config.rating, config.limit, config.spoilerNsfw, "top");
+      break;
+    }
+    case "fetch_random": {
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} random images...`);
+      await sendBooruPostsToChat(api, msg.chat.id, config.rating, config.limit, config.spoilerNsfw, "random");
       break;
     }
     case "fetch_sfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 SFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false);
+      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top");
       break;
     }
     case "fetch_nsfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 NSFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw);
+      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top");
       break;
     }
     default:
@@ -869,7 +919,7 @@ async function handleScheduledBroadcast(env) {
   let sentCount = 0;
   for (const chatId of targets) {
     try {
-      await sendBooruPostsToChat(api, chatId, config.rating, config.limit, config.spoilerNsfw);
+      await sendBooruPostsToChat(api, chatId, config.rating, config.limit, config.spoilerNsfw, config.mode);
       sentCount++;
     } catch (err) {
       console.error(`Daily broadcast failed for chat ${chatId}:`, err);
