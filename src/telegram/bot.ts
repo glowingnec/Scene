@@ -239,23 +239,55 @@ const GENERAL_TAGS = new Set([
   "sweater", "torn_clothes", "see_through", "pointy_ears", "point_ears", "chibi", "dress_lift", "breast_hold", "vibrator", "dildo", "sex_toy", "anus", "saliva", "drool"
 ]);
 
-function toTitleCase(tag: string): string {
-  const clean = tag.replace(/_\([^)]+\)$/, "");
-  return clean
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
+function toTitleCase(name: string): string {
+  if (!name) return "";
+  const clean = name.replace(/_\((?:series|game|anime|manga|novel)\)$/i, "");
+  const parts = clean.split("_");
+  const res: string[] = [];
+  for (const p of parts) {
+    if (!p) continue;
+    if (p.startsWith("(") && p.endsWith(")")) {
+      res.push("(" + p.charAt(1).toUpperCase() + p.slice(2).toLowerCase());
+    } else if (p.startsWith("(")) {
+      res.push("(" + p.charAt(1).toUpperCase() + p.slice(2).toLowerCase());
+    } else if (p.endsWith(")")) {
+      res.push(p.charAt(0).toUpperCase() + p.slice(1, -1).toLowerCase() + ")");
+    } else {
+      res.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    }
+  }
+  return res.join(" ");
 }
 
-function getSourcePlatform(url?: string): string | null {
-  if (!url) return null;
+function cleanCharacterName(charTag: string, copyrightTags: string[]): string {
+  const match = charTag.match(/_\(([^)]+)\)$/);
+  if (match) {
+    const paren = match[1].toLowerCase();
+    const isSeries = copyrightTags.some(
+      (c) =>
+        c.toLowerCase() === paren ||
+        c.toLowerCase().includes(paren) ||
+        paren.includes(c.toLowerCase())
+    );
+    if (isSeries) {
+      return charTag.slice(0, match.index);
+    }
+  }
+  return charTag;
+}
+
+function getSourcePlatform(url?: string): string {
+  if (!url) return "Source";
   const u = url.toLowerCase();
-  if (u.includes("pixiv.net")) return "Pixiv";
+  if (u.includes("pixiv.net") || u.includes("pximg.net")) return "Pixiv";
   if (u.includes("twitter.com") || u.includes("x.com")) return "X (Twitter)";
   if (u.includes("fanbox.cc")) return "Fanbox";
   if (u.includes("fantia.jp")) return "Fantia";
   if (u.includes("dlsite.com")) return "DLsite";
   if (u.includes("bilibili.com")) return "Bilibili";
+  if (u.includes("weibo.com")) return "Weibo";
+  if (u.includes("artstation.com")) return "ArtStation";
+  if (u.includes("skeb.jp")) return "Skeb";
   return "Source";
 }
 
@@ -266,60 +298,49 @@ function formatPostCaption(
   todayDate: string
 ): string {
   const isFirst = index === 0;
-  let caption = "";
-  if (isFirst) {
-    caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
-  }
+  let caption = isFirst
+    ? `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`
+    : "";
 
-  // Line 1: #27 Score: 18 (yande.re link)
+  // Line 1: #11 Score: 6 (yande.re)
   caption += `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">yande.re</a>)`;
 
-  // Line 2: Character (Copyright) / by: Source
-  const nonGeneralTags = (post.tags || []).filter(
-    (t) => !GENERAL_TAGS.has(t.toLowerCase())
+  // Line 2: Character • Copyright / by: Artist name (or Platform)
+  const chars = (post.characterTags || []).map((c) =>
+    toTitleCase(cleanCharacterName(c, post.copyrightTags || []))
   );
+  const copies = (post.copyrightTags || []).map(toTitleCase);
 
-  const charTags: string[] = [];
-  const copyTags: string[] = [];
+  const charStr = chars.slice(0, 2).join(", ");
+  const copyStr = copies.length > 0 ? copies[0] : "";
 
-  const KNOWN_FRANCHISES = [
-    "genshin", "blue_archive", "zenless", "idolm", "wuthering", "honkai",
-    "touhou", "azur_lane", "arknights", "yani_neko", "kairakuten", "seitokai",
-    "fate", "vocaloid", "pokemon", "chainsaw_man", "hololive", "nijisanji", "appetite"
-  ];
+  const tagParts: string[] = [];
+  if (charStr) tagParts.push(escapeHtml(charStr));
+  if (copyStr) tagParts.push(escapeHtml(copyStr));
+  const tagLine = tagParts.join(" • ");
 
-  for (const t of nonGeneralTags) {
-    const parentheticalMatch = t.match(/_\(([^)]+)\)$/);
-    if (parentheticalMatch) {
-      charTags.push(t);
-      copyTags.push(parentheticalMatch[1]);
-    } else if (KNOWN_FRANCHISES.some((f) => t.toLowerCase().includes(f))) {
-      copyTags.push(t);
-    } else {
-      charTags.push(t);
-    }
-  }
-
-  const charStr = charTags.slice(0, 2).map(toTitleCase).join(", ");
-  const copyStr = copyTags.slice(0, 1).map(toTitleCase).join("");
-
-  let tagLine = "";
-  if (charStr && copyStr) {
-    tagLine = `${escapeHtml(charStr)} (${escapeHtml(copyStr)})`;
-  } else if (charStr) {
-    tagLine = escapeHtml(charStr);
-  } else if (copyStr) {
-    tagLine = `(${escapeHtml(copyStr)})`;
-  }
-
+  const artistName = post.artist ? toTitleCase(post.artist) : null;
   const platform = getSourcePlatform(post.sourceUrl);
+
   let byPart = "";
-  if (post.sourceUrl && platform) {
-    byPart = ` / by: <a href="${escapeHtml(post.sourceUrl)}">${platform}</a>`;
+  if (post.sourceUrl) {
+    const linkText = artistName || platform;
+    byPart = `<a href="${escapeHtml(post.sourceUrl)}">${escapeHtml(linkText)}</a>`;
+  } else if (artistName) {
+    byPart = escapeHtml(artistName);
   }
 
-  if (tagLine || byPart) {
-    caption += `\n${tagLine}${byPart}`.trim();
+  let line2 = "";
+  if (tagLine && byPart) {
+    line2 = `${tagLine} / by: ${byPart}`;
+  } else if (tagLine) {
+    line2 = tagLine;
+  } else if (byPart) {
+    line2 = `by: ${byPart}`;
+  }
+
+  if (line2) {
+    caption += `\n${line2}`;
   }
 
   return caption;
@@ -337,10 +358,14 @@ export async function sendBooruPostsToChat(
   limit: number = 30,
   spoilerNsfw: boolean = false
 ): Promise<void> {
-  await api.sendMessage(
+  const loadingRes = await api.sendMessage(
     chatId,
     `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`
   );
+  const loadingMsgId =
+    loadingRes.ok && loadingRes.result?.message_id
+      ? (loadingRes.result.message_id as number)
+      : null;
 
   try {
     const posts = await fetchYanderePosts(rating, limit);
@@ -396,6 +421,10 @@ export async function sendBooruPostsToChat(
       chatId,
       `❌ Failed to load images: ${escapeHtml(err?.message || "Unknown error")}`
     );
+  } finally {
+    if (loadingMsgId) {
+      await api.deleteMessage(chatId, loadingMsgId);
+    }
   }
 }
 

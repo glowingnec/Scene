@@ -149,4 +149,24 @@ export class TelegramApi {
 
     return await res.json();
   }
+
+  async deleteMessage(
+    chatId: number | string,
+    messageId: number
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/deleteMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+        }),
+      });
+
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
 }

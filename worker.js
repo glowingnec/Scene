@@ -151,6 +151,9 @@ async function fetchYanderePosts(ratingFilter, limit = 30) {
     }
   }
 
+  // Fetch tag categorization map from yande.re tag summary
+  const tagMap = await getTagTypeMap();
+
   const validPosts = [];
   const seenIds = new Set();
 
@@ -172,6 +175,57 @@ async function fetchYanderePosts(ratingFilter, limit = 30) {
     const ext = (post.file_ext || "").toLowerCase();
     if (ext === "zip" || ext === "mp4" || ext === "webm") continue;
 
+    const postTags = (post.tags || "").split(" ").filter(Boolean);
+    const charTags = [];
+    const copyTags = [];
+    const artistTags = [];
+
+    for (const t of postTags) {
+      const type = tagMap.get(t);
+      if (type === 4) {
+        charTags.push(t);
+      } else if (type === 3) {
+        copyTags.push(t);
+      } else if (type === 1) {
+        artistTags.push(t);
+      }
+    }
+
+    // Heuristic fallback if tagMap was unavailable
+    if (tagMap.size === 0) {
+      for (const t of postTags) {
+        if (GENERAL_FALLBACK_TAGS.has(t.toLowerCase())) continue;
+        const match = t.match(/_\(([^)]+)\)$/);
+        if (match) {
+          const paren = match[1].toLowerCase();
+          if (NON_COPYRIGHT_PARENS.has(paren)) {
+            charTags.push(t);
+          } else {
+            charTags.push(t.slice(0, match.index));
+            copyTags.push(match[1]);
+          }
+        } else if (KNOWN_FRANCHISES.some((f) => t.toLowerCase().includes(f))) {
+          copyTags.push(t);
+        } else {
+          charTags.push(t);
+        }
+      }
+    }
+
+    // If no copyright found yet, check if any character tag contains series parenthetical
+    if (copyTags.length === 0) {
+      for (const c of charTags) {
+        const match = c.match(/_\(([^)]+)\)$/);
+        if (match) {
+          const paren = match[1].toLowerCase();
+          if (!NON_COPYRIGHT_PARENS.has(paren)) {
+            copyTags.push(match[1]);
+            break;
+          }
+        }
+      }
+    }
+
     validPosts.push({
       id: post.id,
       imageUrl,
@@ -179,8 +233,10 @@ async function fetchYanderePosts(ratingFilter, limit = 30) {
       sourceUrl: post.source ? post.source.trim() : undefined,
       rating,
       isNsfw,
-      tags: (post.tags || "").split(" ").filter(Boolean),
-      artist: post.author,
+      tags: postTags,
+      artist: artistTags.length > 0 ? artistTags[0] : undefined,
+      characterTags: charTags,
+      copyrightTags: copyTags,
       score: post.score || 0,
     });
 
@@ -188,6 +244,79 @@ async function fetchYanderePosts(ratingFilter, limit = 30) {
   }
 
   return validPosts;
+}
+
+let cachedTagMap = null;
+let lastTagMapFetch = 0;
+const TAG_MAP_CACHE_TTL = 1000 * 60 * 60 * 12; // 12 hours
+
+const NON_COPYRIGHT_PARENS = new Set([
+  "female", "male", "cosplay", "costume", "style", "swimsuit", "maid",
+  "bunny", "young", "older", "futa", "monster", "armor", "uniform",
+  "alter", "santa", "summer", "bride", "wedding", "idol"
+]);
+
+const KNOWN_FRANCHISES = [
+  "genshin", "blue_archive", "zenless", "idolm", "wuthering", "honkai",
+  "touhou", "azur_lane", "arknights", "yani_neko", "kairakuten", "seitokai",
+  "fate", "vocaloid", "pokemon", "chainsaw_man", "hololive", "nijisanji"
+];
+
+const GENERAL_FALLBACK_TAGS = new Set([
+  "solo", "1girl", "2girls", "3girls", "4girls", "multiple_girls", "1boy", "2boys", "tagme",
+  "highres", "absurdres", "wallpaper", "dress", "bikini", "swimsuits", "breasts", "cleavage",
+  "looking_at_viewer", "smile", "thighhighs", "panties", "underwear", "pantyhose", "tail", "wings"
+]);
+
+async function getTagTypeMap() {
+  const now = Date.now();
+  if (cachedTagMap && now - lastTagMapFetch < TAG_MAP_CACHE_TTL) {
+    return cachedTagMap;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch("https://yande.re/tag/summary.json", {
+      headers: {
+        "User-Agent": YANDERE_HEADERS["User-Agent"],
+        "Accept-Encoding": "gzip",
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.data) {
+        const map = new Map();
+        const entries = json.data.split(" ");
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i];
+          if (!entry) continue;
+          const parts = entry.split("`");
+          if (parts.length >= 2) {
+            const type = parseInt(parts[0], 10);
+            if (!isNaN(type)) {
+              for (let j = 1; j < parts.length; j++) {
+                if (parts[j]) {
+                  map.set(parts[j], type);
+                }
+              }
+            }
+          }
+        }
+        cachedTagMap = map;
+        lastTagMapFetch = now;
+        return map;
+      }
+    }
+  } catch (err) {
+    console.warn("yande.re tag summary fetch error:", err);
+  }
+
+  if (cachedTagMap) return cachedTagMap;
+  return new Map();
 }
 
 class TelegramApi {
@@ -266,6 +395,22 @@ class TelegramApi {
       }),
     });
     return await res.json();
+  }
+
+  async deleteMessage(chatId, messageId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/deleteMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+        }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
   }
 }
 
@@ -400,89 +545,111 @@ const GENERAL_TAGS = new Set([
   "sweater", "torn_clothes", "see_through", "pointy_ears", "point_ears", "chibi", "dress_lift", "breast_hold", "vibrator", "dildo", "sex_toy", "anus", "saliva", "drool"
 ]);
 
-function toTitleCase(tag) {
-  const clean = tag.replace(/_\([^)]+\)$/, "");
-  return clean
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
+function toTitleCase(name) {
+  if (!name) return "";
+  const clean = name.replace(/_\((?:series|game|anime|manga|novel)\)$/i, "");
+  const parts = clean.split("_");
+  const res = [];
+  for (const p of parts) {
+    if (!p) continue;
+    if (p.startsWith("(") && p.endsWith(")")) {
+      res.push("(" + p.charAt(1).toUpperCase() + p.slice(2).toLowerCase());
+    } else if (p.startsWith("(")) {
+      res.push("(" + p.charAt(1).toUpperCase() + p.slice(2).toLowerCase());
+    } else if (p.endsWith(")")) {
+      res.push(p.charAt(0).toUpperCase() + p.slice(1, -1).toLowerCase() + ")");
+    } else {
+      res.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    }
+  }
+  return res.join(" ");
+}
+
+function cleanCharacterName(charTag, copyrightTags) {
+  const match = charTag.match(/_\(([^)]+)\)$/);
+  if (match) {
+    const paren = match[1].toLowerCase();
+    const isSeries = (copyrightTags || []).some(
+      (c) =>
+        c.toLowerCase() === paren ||
+        c.toLowerCase().includes(paren) ||
+        paren.includes(c.toLowerCase())
+    );
+    if (isSeries) {
+      return charTag.slice(0, match.index);
+    }
+  }
+  return charTag;
 }
 
 function getSourcePlatform(url) {
-  if (!url) return null;
+  if (!url) return "Source";
   const u = url.toLowerCase();
-  if (u.includes("pixiv.net")) return "Pixiv";
+  if (u.includes("pixiv.net") || u.includes("pximg.net")) return "Pixiv";
   if (u.includes("twitter.com") || u.includes("x.com")) return "X (Twitter)";
   if (u.includes("fanbox.cc")) return "Fanbox";
   if (u.includes("fantia.jp")) return "Fantia";
   if (u.includes("dlsite.com")) return "DLsite";
   if (u.includes("bilibili.com")) return "Bilibili";
+  if (u.includes("weibo.com")) return "Weibo";
+  if (u.includes("artstation.com")) return "ArtStation";
+  if (u.includes("skeb.jp")) return "Skeb";
   return "Source";
 }
 
 function formatPostCaption(post, index, displayCount, todayDate) {
   const isFirst = index === 0;
-  let caption = "";
-  if (isFirst) {
-    caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
-  }
+  let caption = isFirst
+    ? `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`
+    : "";
 
-  // Line 1: #27 Score: 18 (yande.re link)
+  // Line 1: #11 Score: 6 (yande.re)
   caption += `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">yande.re</a>)`;
 
-  // Line 2: Character (Copyright) / by: Source
-  const nonGeneralTags = (post.tags || []).filter(
-    (t) => !GENERAL_TAGS.has(t.toLowerCase())
+  // Line 2: Character • Copyright / by: Artist name (or Platform)
+  const chars = (post.characterTags || []).map((c) =>
+    toTitleCase(cleanCharacterName(c, post.copyrightTags || []))
   );
+  const copies = (post.copyrightTags || []).map(toTitleCase);
 
-  const charTags = [];
-  const copyTags = [];
+  const charStr = chars.slice(0, 2).join(", ");
+  const copyStr = copies.length > 0 ? copies[0] : "";
 
-  const KNOWN_FRANCHISES = [
-    "genshin", "blue_archive", "zenless", "idolm", "wuthering", "honkai",
-    "touhou", "azur_lane", "arknights", "yani_neko", "kairakuten", "seitokai",
-    "fate", "vocaloid", "pokemon", "chainsaw_man", "hololive", "nijisanji", "appetite"
-  ];
+  const tagParts = [];
+  if (charStr) tagParts.push(escapeHtml(charStr));
+  if (copyStr) tagParts.push(escapeHtml(copyStr));
+  const tagLine = tagParts.join(" • ");
 
-  for (const t of nonGeneralTags) {
-    const parentheticalMatch = t.match(/_\(([^)]+)\)$/);
-    if (parentheticalMatch) {
-      charTags.push(t);
-      copyTags.push(parentheticalMatch[1]);
-    } else if (KNOWN_FRANCHISES.some((f) => t.toLowerCase().includes(f))) {
-      copyTags.push(t);
-    } else {
-      charTags.push(t);
-    }
-  }
-
-  const charStr = charTags.slice(0, 2).map(toTitleCase).join(", ");
-  const copyStr = copyTags.slice(0, 1).map(toTitleCase).join("");
-
-  let tagLine = "";
-  if (charStr && copyStr) {
-    tagLine = `${escapeHtml(charStr)} (${escapeHtml(copyStr)})`;
-  } else if (charStr) {
-    tagLine = escapeHtml(charStr);
-  } else if (copyStr) {
-    tagLine = `(${escapeHtml(copyStr)})`;
-  }
-
+  const artistName = post.artist ? toTitleCase(post.artist) : null;
   const platform = getSourcePlatform(post.sourceUrl);
+
   let byPart = "";
-  if (post.sourceUrl && platform) {
-    byPart = ` / by: <a href="${escapeHtml(post.sourceUrl)}">${platform}</a>`;
+  if (post.sourceUrl) {
+    const linkText = artistName || platform;
+    byPart = `<a href="${escapeHtml(post.sourceUrl)}">${escapeHtml(linkText)}</a>`;
+  } else if (artistName) {
+    byPart = escapeHtml(artistName);
   }
 
-  if (tagLine || byPart) {
-    caption += `\n${tagLine}${byPart}`.trim();
+  let line2 = "";
+  if (tagLine && byPart) {
+    line2 = `${tagLine} / by: ${byPart}`;
+  } else if (tagLine) {
+    line2 = tagLine;
+  } else if (byPart) {
+    line2 = `by: ${byPart}`;
+  }
+
+  if (line2) {
+    caption += `\n${line2}`;
   }
 
   return caption;
 }
 
 async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw = false) {
-  await api.sendMessage(chatId, `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`);
+  const loadingRes = await api.sendMessage(chatId, `⏳ <i>Fetching top ${limit} images from <b>yande.re</b>...</i>`);
+  const loadingMsgId = loadingRes && loadingRes.ok && loadingRes.result && loadingRes.result.message_id ? loadingRes.result.message_id : null;
 
   try {
     const posts = await fetchYanderePosts(rating, limit);
@@ -529,6 +696,10 @@ async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw
   } catch (err) {
     console.error("sendBooruPostsToChat error:", err);
     await api.sendMessage(chatId, `❌ Failed to load images: ${escapeHtml(err.message || "Unknown error")}`);
+  } finally {
+    if (loadingMsgId) {
+      await api.deleteMessage(chatId, loadingMsgId);
+    }
   }
 }
 

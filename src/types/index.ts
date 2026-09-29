@@ -23,6 +23,8 @@ export interface BooruPost {
   isNsfw: boolean;
   tags: string[];
   artist?: string;
+  characterTags?: string[];
+  copyrightTags?: string[];
   score: number;
 }
 
