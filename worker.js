@@ -1370,7 +1370,19 @@ async function handleTelegramMessage(message, env) {
             `• <code>/search hu_tao both</code>\n` +
             `• <code>/search firefly 15 nsfw yan</code>\n` +
             `• <code>/search marin_kitagawa 20 sfw gel</code>\n\n` +
-            `💡 <i>Tip: Use <code>/tags &lt;query&gt;</code> to check if a tag exists on yande.re or Gelbooru!</i>`
+            `💡 <i>Tip: Tap the button below to search with live autocomplete!</i>`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "🔍 Search Tag (Live Autocomplete)",
+                    switch_inline_query_current_chat: "",
+                  },
+                ],
+              ],
+            },
+          }
         );
         break;
       }
@@ -1411,7 +1423,20 @@ async function handleTelegramMessage(message, env) {
             `• <code>/tags hu</code> (searches active source: ${config.source})\n` +
             `• <code>/tags firefly yan</code> (searches yande.re)\n` +
             `• <code>/tags genshin gel</code> (searches Gelbooru)\n` +
-            `• <code>/tags raiden both</code> (searches both)`
+            `• <code>/tags raiden both</code> (searches both)\n\n` +
+            `💡 <i>Tip: Tap the button below to type with instant live suggestions!</i>`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "🔍 Search Tag (Live Autocomplete)",
+                    switch_inline_query_current_chat: "",
+                  },
+                ],
+              ],
+            },
+          }
         );
         break;
       }
@@ -1590,6 +1615,12 @@ async function handleTelegramMessage(message, env) {
       await api.sendMessage(chat.id, formatSettingsText(config), {
         reply_markup: {
           inline_keyboard: [
+            [
+              {
+                text: "🔍 Search Tag (Live Autocomplete)",
+                switch_inline_query_current_chat: "",
+              },
+            ],
             [
               { text: `🚀 Top ${config.limit}`, callback_data: "fetch_top" },
               { text: `🎲 Random ${config.limit}`, callback_data: "fetch_random" },
