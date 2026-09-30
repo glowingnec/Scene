@@ -166,7 +166,7 @@ export class TelegramApi {
       body: JSON.stringify({
         url,
         secret_token: secretToken,
-        allowed_updates: ["message", "callback_query"],
+        allowed_updates: ["message", "callback_query", "inline_query"],
       }),
     });
 

@@ -724,7 +724,7 @@ class TelegramApi {
       body: JSON.stringify({
         url,
         secret_token: secretToken,
-        allowed_updates: ["message", "callback_query"],
+        allowed_updates: ["message", "callback_query", "inline_query"],
       }),
     });
     return await res.json();
@@ -1804,6 +1804,86 @@ async function handleScheduledBroadcast(env) {
   return `Broadcast sent to ${sentCount}/${targets.size} chats.`;
 }
 
+/**
+ * Telegram Real-Time Autocomplete Inline Query Handler
+ */
+async function handleTelegramInlineQuery(inlineQuery, env) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const api = new TelegramApi(token);
+  const config = getConfig(env);
+  const gelAuth = { apiKey: config.gelbooruApiKey, userId: config.gelbooruUserId };
+
+  const query = (inlineQuery.query || "").trim();
+  if (!query) {
+    await api.answerInlineQuery(
+      inlineQuery.id,
+      [
+        {
+          type: "article",
+          id: "hint_prompt",
+          title: "🔍 Type a tag, character, or artist...",
+          description: "e.g. hu_tao, firefly, raiden, blue_archive",
+          input_message_content: {
+            message_text: "/tags",
+          },
+        },
+      ],
+      { cache_time: 5, is_personal: true }
+    );
+    return;
+  }
+
+  try {
+    const suggestions = await searchBooruTags(query, 12, gelAuth, config.source);
+    if (suggestions.length === 0) {
+      await api.answerInlineQuery(
+        inlineQuery.id,
+        [
+          {
+            type: "article",
+            id: `no_tag_${encodeURIComponent(query)}`,
+            title: `⚠️ No matching tags for "${query}"`,
+            description: `Check spelling or try a broader keyword`,
+            input_message_content: {
+              message_text: `/tags ${query}`,
+            },
+          },
+        ],
+        { cache_time: 30, is_personal: true }
+      );
+      return;
+    }
+
+    const results = suggestions.map((tag, idx) => {
+      const emoji = getTagTypeEmoji(tag.type);
+      const label = getTagTypeLabel(tag.type);
+      let desc = "";
+      if (config.source === "both") {
+        const yanStr = tag.yandereCount !== undefined ? tag.yandereCount.toLocaleString() : "0";
+        const gelStr = tag.gelbooruCount !== undefined ? tag.gelbooruCount.toLocaleString() : "0";
+        desc = `🌸 yande.re: ${yanStr} • 🌀 Gelbooru: ${gelStr} posts`;
+      } else {
+        const srcName = config.source === "gelbooru" ? "Gelbooru" : "yande.re";
+        desc = `${tag.count.toLocaleString()} posts on ${srcName}`;
+      }
+
+      return {
+        type: "article",
+        id: `tag_${idx}_${tag.name}`,
+        title: `${emoji} ${tag.name} (${label})`,
+        description: desc,
+        input_message_content: {
+          message_text: `/search ${tag.name}`,
+        },
+      };
+    });
+
+    await api.answerInlineQuery(inlineQuery.id, results, { cache_time: 60, is_personal: true });
+  } catch (err) {
+    console.error("Error answering inline query:", err);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -1868,6 +1948,8 @@ export default {
           ctx.waitUntil(handleTelegramMessage(update.message, env));
         } else if (update.callback_query) {
           ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env));
+        } else if (update.inline_query) {
+          ctx.waitUntil(handleTelegramInlineQuery(update.inline_query, env));
         }
         return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" }, status: 200 });
       } catch (err) {

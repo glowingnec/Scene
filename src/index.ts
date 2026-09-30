@@ -3,6 +3,7 @@ import { TelegramApi } from "./telegram/api";
 import {
   handleTelegramMessage,
   handleTelegramCallbackQuery,
+  handleTelegramInlineQuery,
   handleScheduledBroadcast,
   DEFAULT_BOT_COMMANDS,
 } from "./telegram/bot";
@@ -90,6 +91,8 @@ export default {
           ctx.waitUntil(handleTelegramMessage(update.message, env));
         } else if (update.callback_query) {
           ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env));
+        } else if (update.inline_query) {
+          ctx.waitUntil(handleTelegramInlineQuery(update.inline_query, env));
         }
 
         return new Response(JSON.stringify({ ok: true }), {

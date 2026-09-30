@@ -8,6 +8,8 @@ import {
   TelegramMessage,
   TelegramCallbackQuery,
   TelegramUser,
+  TelegramInlineQuery,
+  TelegramInlineQueryResultArticle,
   InputMediaPhoto,
   InlineKeyboardButton,
 } from "../types";
@@ -1185,4 +1187,88 @@ export async function handleScheduledBroadcast(env: Env): Promise<string> {
   }
 
   return `Broadcast sent to ${sentCount}/${targets.size} chats.`;
+}
+
+/**
+ * Telegram Real-Time Autocomplete Inline Query Handler.
+ * Triggered as the user types `@botusername query`
+ */
+export async function handleTelegramInlineQuery(
+  inlineQuery: TelegramInlineQuery,
+  env: Env
+): Promise<void> {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const api = new TelegramApi(token);
+  const config = getConfig(env);
+  const gelAuth = { apiKey: config.gelbooruApiKey, userId: config.gelbooruUserId };
+
+  const query = (inlineQuery.query || "").trim();
+  if (!query) {
+    await api.answerInlineQuery(
+      inlineQuery.id,
+      [
+        {
+          type: "article",
+          id: "hint_prompt",
+          title: "🔍 Type a tag, character, or artist...",
+          description: "e.g. hu_tao, firefly, raiden, blue_archive",
+          input_message_content: {
+            message_text: "/tags",
+          },
+        },
+      ],
+      { cache_time: 5, is_personal: true }
+    );
+    return;
+  }
+
+  try {
+    const suggestions = await searchBooruTags(query, 12, gelAuth, config.source);
+    if (suggestions.length === 0) {
+      await api.answerInlineQuery(
+        inlineQuery.id,
+        [
+          {
+            type: "article",
+            id: `no_tag_${encodeURIComponent(query)}`,
+            title: `⚠️ No matching tags for "${query}"`,
+            description: `Check spelling or try a broader keyword`,
+            input_message_content: {
+              message_text: `/tags ${query}`,
+            },
+          },
+        ],
+        { cache_time: 30, is_personal: true }
+      );
+      return;
+    }
+
+    const results: TelegramInlineQueryResultArticle[] = suggestions.map((tag, idx) => {
+      const emoji = getTagTypeEmoji(tag.type);
+      const label = getTagTypeLabel(tag.type);
+      let desc = "";
+      if (config.source === "both") {
+        const yanStr = tag.yandereCount !== undefined ? tag.yandereCount.toLocaleString() : "0";
+        const gelStr = tag.gelbooruCount !== undefined ? tag.gelbooruCount.toLocaleString() : "0";
+        desc = `🌸 yande.re: ${yanStr} • 🌀 Gelbooru: ${gelStr} posts`;
+      } else {
+        const srcName = config.source === "gelbooru" ? "Gelbooru" : "yande.re";
+        desc = `${tag.count.toLocaleString()} posts on ${srcName}`;
+      }
+
+      return {
+        type: "article",
+        id: `tag_${idx}_${tag.name}`,
+        title: `${emoji} ${tag.name} (${label})`,
+        description: desc,
+        input_message_content: {
+          message_text: `/search ${tag.name}`,
+        },
+      };
+    });
+
+    await api.answerInlineQuery(inlineQuery.id, results, { cache_time: 60, is_personal: true });
+  } catch (err) {
+    console.error("Error answering inline query:", err);
+  }
 }
