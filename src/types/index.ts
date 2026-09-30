@@ -1,4 +1,4 @@
-export type BooruSource = "yandere";
+export type BooruSource = "yandere" | "gelbooru" | "both";
 export type RatingFilter = "sfw" | "nsfw" | "all";
 export type DeliveryMode = "top" | "random";
 
@@ -14,11 +14,13 @@ export interface Env {
   DELIVERY_MODE?: string;
   DEFAULT_SPOILER_NSFW?: string;
   SECRET_TOKEN?: string;
+  GELBOORU_API_KEY?: string;
+  GELBOORU_USER_ID?: string;
 }
 
 export interface BooruPost {
   id: number | string;
-  source: BooruSource;
+  source: "yandere" | "gelbooru";
   imageUrl: string;
   postUrl: string;
   sourceUrl?: string;
@@ -39,6 +41,8 @@ export interface BotSettings {
   ownerChatId?: number | string;
   subscribedChatIds: (number | string)[];
   spoilerNsfw: boolean;
+  gelbooruApiKey?: string;
+  gelbooruUserId?: string;
 }
 
 export interface TelegramUser {
@@ -74,10 +78,39 @@ export interface TelegramCallbackQuery {
   data?: string;
 }
 
+export interface TelegramInlineQuery {
+  id: string;
+  from: TelegramUser;
+  query: string;
+  offset: string;
+}
+
+export interface TelegramInlineQueryResultArticle {
+  type: "article";
+  id: string;
+  title: string;
+  description?: string;
+  input_message_content: {
+    message_text: string;
+    parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+    disable_web_page_preview?: boolean;
+  };
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
+  inline_query?: TelegramInlineQuery;
+}
+
+export interface BooruTagSuggestion {
+  name: string;
+  count: number;
+  yandereCount?: number;
+  gelbooruCount?: number;
+  type: number;
+  source: "yandere" | "gelbooru" | "both";
 }
 
 export interface InputMediaPhoto {

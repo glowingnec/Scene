@@ -136,6 +136,29 @@ export class TelegramApi {
     return await res.json();
   }
 
+  async answerInlineQuery(
+    inlineQueryId: string,
+    results: any[],
+    options?: { cache_time?: number; is_personal?: boolean }
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/answerInlineQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inline_query_id: inlineQueryId,
+          results,
+          cache_time: options?.cache_time ?? 300,
+          is_personal: options?.is_personal ?? false,
+        }),
+      });
+
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
+
   async setWebhook(url: string, secretToken?: string): Promise<{ ok: boolean; description?: string }> {
     const res = await fetch(`${this.baseUrl}/setWebhook`, {
       method: "POST",

@@ -12,11 +12,11 @@ crons = ["0 1 * * *"]
 OWNER_USERNAME = "cheytac29"
 # Bot owner numeric Telegram Chat ID (configured directly as normal variable)
 OWNER_CHAT_ID = "1368225736"
-# Default source: yande.re
-DEFAULT_SOURCE = "yandere"
+# Default source: "both" (fetches from both yande.re & Gelbooru), "yandere", or "gelbooru"
+DEFAULT_SOURCE = "both"
 # Default rating filter: "all" (SFW + Questionable + Explicit)
 DEFAULT_RATING = "all"
-# Default everyday image count: 30
+# Default everyday image count (per source): 30
 DEFAULT_LIMIT = "30"
 # NSFW spoilers: "false" (unblurred by default)
 DEFAULT_SPOILER_NSFW = "false"
@@ -24,3 +24,5 @@ DEFAULT_SPOILER_NSFW = "false"
 # Required Secrets (configure via `npx wrangler secret put <NAME>` or Cloudflare Dashboard):
 # - TELEGRAM_BOT_TOKEN: Your Telegram bot token from @BotFather (Required)
 # - SECRET_TOKEN: Optional webhook verification secret
+# - GELBOORU_API_KEY: Gelbooru API Key (from gelbooru.com/index.php?page=account&s=options)
+# - GELBOORU_USER_ID: Gelbooru Numeric User ID

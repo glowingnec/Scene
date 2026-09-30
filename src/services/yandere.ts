@@ -25,11 +25,34 @@ interface YandereRawPost {
 export async function fetchYanderePosts(
   ratingFilter: RatingFilter,
   limit: number = 30,
-  mode: DeliveryMode = "top"
+  mode: DeliveryMode = "top",
+  tagQuery?: string
 ): Promise<BooruPost[]> {
   let rawPosts: YandereRawPost[] = [];
 
-  if (mode === "random") {
+  if (tagQuery && tagQuery.trim()) {
+    try {
+      const cleanTag = tagQuery.trim().replace(/\s+/g, "_");
+      let ratingTag = "";
+      if (ratingFilter === "sfw") ratingTag = "rating:s";
+      else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
+
+      const orderTag = mode === "random" ? "order:random" : "order:score";
+      const searchTags = [cleanTag, orderTag, ratingTag].filter(Boolean).join(" ");
+      const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(
+        searchTags
+      )}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
+      const res = await fetch(searchUrl, { headers: YANDERE_HEADERS });
+      if (res.ok) {
+        const data = (await res.json()) as YandereRawPost[];
+        if (Array.isArray(data)) {
+          rawPosts = data;
+        }
+      }
+    } catch (err) {
+      console.error("yande.re tag search error:", err);
+    }
+  } else if (mode === "random") {
     try {
       let ratingTag = "";
       if (ratingFilter === "sfw") ratingTag = "rating:s";

@@ -20,7 +20,7 @@ export default {
         JSON.stringify({
           status: "healthy",
           bot: "Scene Telegram Bot",
-          source: "yandere",
+          source: env.DEFAULT_SOURCE || "both",
           owner: env.OWNER_USERNAME || "cheytac29",
           timestamp: new Date().toISOString(),
         }),

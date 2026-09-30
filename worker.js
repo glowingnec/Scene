@@ -12,7 +12,7 @@
 const DEFAULT_CONFIG = {
   OWNER_USERNAME: "cheytac29",
   OWNER_CHAT_ID: 1368225736,
-  DEFAULT_SOURCE: "yandere",
+  DEFAULT_SOURCE: "both",
   DEFAULT_RATING: "all",
   DEFAULT_LIMIT: 30,
   DEFAULT_MODE: "top",
@@ -36,6 +36,9 @@ function parseChatTarget(val) {
 }
 
 function getConfig(env) {
+  const rawSource = (env.DEFAULT_SOURCE || DEFAULT_CONFIG.DEFAULT_SOURCE).toLowerCase();
+  const source = rawSource === "gelbooru" ? "gelbooru" : rawSource === "yandere" ? "yandere" : "both";
+
   const rawRating = (env.DEFAULT_RATING || DEFAULT_CONFIG.DEFAULT_RATING).toLowerCase();
   const rating = rawRating === "sfw" ? "sfw" : rawRating === "nsfw" ? "nsfw" : "all";
 
@@ -51,13 +54,15 @@ function getConfig(env) {
   const ownerChatId = parseChatTarget(env.OWNER_CHAT_ID || env.CHANNEL_ID) || DEFAULT_CONFIG.OWNER_CHAT_ID;
 
   return {
-    source: "yandere",
+    source,
     rating,
     mode,
     limit,
     ownerChatId,
     subscribedChatIds: [ownerChatId],
     spoilerNsfw,
+    gelbooruApiKey: env.GELBOORU_API_KEY ? env.GELBOORU_API_KEY.trim() : undefined,
+    gelbooruUserId: env.GELBOORU_USER_ID ? env.GELBOORU_USER_ID.trim() : undefined,
   };
 }
 
@@ -90,24 +95,185 @@ function formatSettingsText(config) {
   const spoilerText = config.spoilerNsfw ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
   const targetText = config.ownerChatId ? `<code>${config.ownerChatId}</code>` : "<code>1368225736</code>";
   const modeText = config.mode === "random" ? "Random Images 🎲" : "Top Popular Today 🌟";
+  const sourceText =
+    config.source === "both"
+      ? "Both (yande.re + Gelbooru) 🌐"
+      : config.source === "gelbooru"
+      ? "Gelbooru 🌀"
+      : "yande.re 🌸";
+  const countText =
+    config.source === "both"
+      ? `<code>${config.limit} images per source</code>`
+      : `<code>${config.limit} images</code>`;
 
   return (
     `⚙️ <b>Active Bot Configuration</b>\n\n` +
-    `• <b>Source:</b> <code>yande.re</code>\n` +
+    `• <b>Source:</b> <code>${sourceText}</code>\n` +
     `• <b>Delivery Mode:</b> <code>${modeText}</code>\n` +
     `• <b>Default Rating:</b> <code>${getRatingBadgeText(config.rating)}</code>\n` +
     `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
-    `• <b>Everyday Count:</b> <code>${config.limit} images</code>\n` +
+    `• <b>Everyday Count:</b> ${countText}\n` +
     `• <b>Delivery Target:</b> ${targetText}\n` +
     `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables). Set <code>DEFAULT_MODE</code> to <code>top</code> or <code>random</code>.</i>`
+    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables). Set <code>DEFAULT_SOURCE</code> to <code>both</code>, <code>yandere</code>, or <code>gelbooru</code>.</i>`
   );
 }
 
-async function fetchYanderePosts(ratingFilter, limit = 30, mode = "top") {
+function getTagTypeLabel(type) {
+  switch (type) {
+    case 4:
+      return "Character";
+    case 3:
+      return "Series / Copyright";
+    case 1:
+      return "Artist";
+    default:
+      return "General";
+  }
+}
+
+function getTagTypeEmoji(type) {
+  switch (type) {
+    case 4:
+      return "👤";
+    case 3:
+      return "📚";
+    case 1:
+      return "🎨";
+    default:
+      return "🏷️";
+  }
+}
+
+async function searchBooruTags(query, limit = 10, gelbooruAuth, source = "both") {
+  const clean = query.trim().toLowerCase().replace(/\s+/g, "_");
+  if (!clean) return [];
+
+  const promises = [];
+
+  // 1. yande.re tag search
+  if (source === "both" || source === "yandere") {
+    promises.push(
+      (async () => {
+        try {
+          const url = `https://yande.re/tag.json?name=*${encodeURIComponent(clean)}*&order=count&limit=${limit * 2}`;
+          const res = await fetch(url, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              Accept: "application/json",
+            },
+          });
+          if (!res.ok) return { items: [], source: "yandere" };
+          const data = await res.json();
+          if (!Array.isArray(data)) return { items: [], source: "yandere" };
+          return {
+            items: data.map((t) => ({
+              name: t.name,
+              count: t.count || 0,
+              type: t.type ?? 0,
+            })),
+            source: "yandere",
+          };
+        } catch (err) {
+          console.warn("yande.re tag search error:", err);
+          return { items: [], source: "yandere" };
+        }
+      })()
+    );
+  }
+
+  // 2. Gelbooru tag search
+  if ((source === "both" || source === "gelbooru") && gelbooruAuth?.apiKey && gelbooruAuth?.userId) {
+    promises.push(
+      (async () => {
+        try {
+          const url = `https://gelbooru.com/index.php?page=dapi&s=tag&q=index&json=1&name_pattern=%25${encodeURIComponent(
+            clean
+          )}%25&api_key=${gelbooruAuth.apiKey}&user_id=${gelbooruAuth.userId}&limit=${limit * 2}`;
+          const res = await fetch(url, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              Accept: "application/json",
+            },
+          });
+          if (!res.ok) return { items: [], source: "gelbooru" };
+          const data = await res.json();
+          const rawTags = Array.isArray(data) ? data : data?.tag || [];
+          return {
+            items: rawTags.map((t) => ({
+              name: t.name,
+              count: parseInt(t.count || "0", 10),
+              type: parseInt(t.type || "0", 10),
+            })),
+            source: "gelbooru",
+          };
+        } catch (err) {
+          console.warn("Gelbooru tag search error:", err);
+          return { items: [], source: "gelbooru" };
+        }
+      })()
+    );
+  }
+
+  const results = await Promise.all(promises);
+  const tagMap = new Map();
+
+  for (const group of results) {
+    for (const item of group.items) {
+      const existing = tagMap.get(item.name);
+      if (existing) {
+        if (group.source === "yandere") {
+          existing.yandereCount = item.count;
+        } else {
+          existing.gelbooruCount = item.count;
+        }
+        existing.count = (existing.yandereCount || 0) + (existing.gelbooruCount || 0);
+        existing.source = "both";
+        if (existing.type === 0 && item.type !== 0) {
+          existing.type = item.type;
+        }
+      } else {
+        tagMap.set(item.name, {
+          name: item.name,
+          count: item.count,
+          type: item.type,
+          source: group.source,
+          yandereCount: group.source === "yandere" ? item.count : undefined,
+          gelbooruCount: group.source === "gelbooru" ? item.count : undefined,
+        });
+      }
+    }
+  }
+
+  return Array.from(tagMap.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
+async function fetchYanderePosts(ratingFilter, limit = 30, mode = "top", tagQuery) {
   let rawPosts = [];
 
-  if (mode === "random") {
+  if (tagQuery && tagQuery.trim()) {
+    try {
+      const cleanTag = tagQuery.trim().replace(/\s+/g, "_");
+      let ratingTag = "";
+      if (ratingFilter === "sfw") ratingTag = "rating:s";
+      else if (ratingFilter === "nsfw") ratingTag = "rating:q,e";
+
+      const orderTag = mode === "random" ? "order:random" : "order:score";
+      const searchTags = [cleanTag, orderTag, ratingTag].filter(Boolean).join(" ");
+      const searchUrl = `https://yande.re/post.json?tags=${encodeURIComponent(searchTags)}&limit=${Math.min(100, Math.max(limit * 2, 30))}`;
+      const res = await fetch(searchUrl, { headers: YANDERE_HEADERS });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) rawPosts = data;
+      }
+    } catch (err) {
+      console.error("yande.re tag search error:", err);
+    }
+  } else if (mode === "random") {
     try {
       let ratingTag = "";
       if (ratingFilter === "sfw") ratingTag = "rating:s";
@@ -253,6 +419,7 @@ async function fetchYanderePosts(ratingFilter, limit = 30, mode = "top") {
 
     validPosts.push({
       id: post.id,
+      source: "yandere",
       imageUrl,
       postUrl: `https://yande.re/post/show/${post.id}`,
       sourceUrl: post.source ? post.source.trim() : undefined,
@@ -269,6 +436,129 @@ async function fetchYanderePosts(ratingFilter, limit = 30, mode = "top") {
   }
 
   return validPosts;
+}
+
+const GELBOORU_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Referer": "https://gelbooru.com/",
+};
+
+async function fetchGelbooruPosts(ratingFilter, limit = 30, mode = "top", apiKey, userId, tagQuery) {
+  const tags = [];
+
+  if (tagQuery && tagQuery.trim()) {
+    tags.push(tagQuery.trim().replace(/\s+/g, "_"));
+  }
+
+  if (ratingFilter === "sfw") tags.push("rating:general");
+  else if (ratingFilter === "nsfw") tags.push("-rating:general");
+
+  if (mode === "random") tags.push("sort:random");
+  else tags.push("sort:score:desc");
+
+  const queryParams = new URLSearchParams({
+    page: "dapi",
+    s: "post",
+    q: "index",
+    json: "1",
+    limit: String(Math.min(100, Math.max(limit * 2, 20))),
+  });
+
+  if (tags.length > 0) queryParams.set("tags", tags.join(" "));
+  if (apiKey && userId) {
+    queryParams.set("api_key", apiKey);
+    queryParams.set("user_id", userId);
+  }
+
+  const url = `https://gelbooru.com/index.php?${queryParams.toString()}`;
+
+  try {
+    const res = await fetch(url, { headers: GELBOORU_HEADERS });
+    if (!res.ok) {
+      if (res.status === 401) {
+        console.warn("Gelbooru API returned 401 Unauthorized. Configure GELBOORU_API_KEY and GELBOORU_USER_ID.");
+      } else {
+        console.warn(`Gelbooru API returned HTTP ${res.status}`);
+      }
+      return [];
+    }
+
+    const data = await res.json();
+    let rawPosts = [];
+    if (Array.isArray(data)) rawPosts = data;
+    else if (data && Array.isArray(data.post)) rawPosts = data.post;
+
+    const validPosts = [];
+    const seenIds = new Set();
+
+    for (const post of rawPosts) {
+      if (!post.id || seenIds.has(post.id)) continue;
+      seenIds.add(post.id);
+
+      if (post.status === "deleted") continue;
+
+      const rating = (post.rating || "general").toLowerCase();
+      const isNsfw = rating !== "general";
+
+      if (ratingFilter === "sfw" && isNsfw) continue;
+      if (ratingFilter === "nsfw" && !isNsfw) continue;
+
+      const imageUrl = post.sample_url || post.file_url;
+      if (!imageUrl) continue;
+
+      const lowerImg = imageUrl.toLowerCase();
+      if (lowerImg.endsWith(".mp4") || lowerImg.endsWith(".webm") || lowerImg.endsWith(".zip")) continue;
+
+      const postTags = (post.tags || "").split(" ").filter(Boolean);
+
+      validPosts.push({
+        id: post.id,
+        source: "gelbooru",
+        imageUrl,
+        postUrl: `https://gelbooru.com/index.php?page=post&s=view&id=${post.id}`,
+        sourceUrl: post.source ? post.source.trim() : undefined,
+        rating,
+        isNsfw,
+        tags: postTags,
+        score: post.score || 0,
+      });
+
+      if (validPosts.length >= limit) break;
+    }
+
+    return validPosts;
+  } catch (err) {
+    console.error("fetchGelbooruPosts error:", err);
+    return [];
+  }
+}
+
+async function fetchBooruPosts(source, rating, limit = 30, mode = "top", gelbooruAuth, tagQuery) {
+  if (source === "yandere") {
+    const yanderePosts = await fetchYanderePosts(rating, limit, mode, tagQuery);
+    return { yanderePosts, gelbooruPosts: [], posts: yanderePosts };
+  }
+
+  if (source === "gelbooru") {
+    const gelbooruPosts = await fetchGelbooruPosts(
+      rating,
+      limit,
+      mode,
+      gelbooruAuth?.apiKey,
+      gelbooruAuth?.userId,
+      tagQuery
+    );
+    return { yanderePosts: [], gelbooruPosts, posts: gelbooruPosts };
+  }
+
+  // source === "both": Fetch limit per source concurrently
+  const [yanderePosts, gelbooruPosts] = await Promise.all([
+    fetchYanderePosts(rating, limit, mode, tagQuery),
+    fetchGelbooruPosts(rating, limit, mode, gelbooruAuth?.apiKey, gelbooruAuth?.userId, tagQuery),
+  ]);
+
+  return { yanderePosts, gelbooruPosts, posts: [...yanderePosts, ...gelbooruPosts] };
 }
 
 let cachedTagMap = null;
@@ -407,6 +697,24 @@ class TelegramApi {
       body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
     });
     return await res.json();
+  }
+
+  async answerInlineQuery(inlineQueryId, results, options = {}) {
+    try {
+      const res = await fetch(`${this.baseUrl}/answerInlineQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inline_query_id: inlineQueryId,
+          results,
+          cache_time: options.cache_time ?? 300,
+          is_personal: options.is_personal ?? false,
+        }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err?.message || "Network error" };
+    }
   }
 
   async setWebhook(url, secretToken) {
@@ -648,19 +956,10 @@ function getSourcePlatform(url) {
   return "Source";
 }
 
-function formatPostCaption(post, index, displayCount, todayDate, mode = "top") {
-  const isFirst = index === 0;
-  let caption = "";
-  if (isFirst) {
-    if (mode === "random") {
-      caption = `🎲 <b>${displayCount} Random Images • yande.re</b>\n\n`;
-    } else {
-      caption = `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
-    }
-  }
-
-  // Line 1: #11 Score: 6 (yande.re)
-  caption += `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">yande.re</a>)`;
+function formatPostCaption(post, index, formattedDate, mode = "top") {
+  // Line 1: #1 Score: 6 (yande.re) or (Gelbooru)
+  const sourceName = post.source === "gelbooru" ? "Gelbooru" : "yande.re";
+  let caption = `#${index + 1} Score: ${post.score} (<a href="${post.postUrl}">${sourceName}</a>)`;
 
   // Line 2: Character • Copyright / by: Artist name (or Platform)
   const chars = (post.characterTags || []).map((c) =>
@@ -703,89 +1002,283 @@ function formatPostCaption(post, index, displayCount, todayDate, mode = "top") {
   return caption;
 }
 
-async function sendBooruPostsToChat(api, chatId, rating, limit = 30, spoilerNsfw = false, mode = "top") {
+async function sendBooruPostsToChat(
+  api,
+  chatId,
+  rating,
+  limit = 30,
+  spoilerNsfw = false,
+  mode = "top",
+  source = "both",
+  gelbooruAuth,
+  tagQuery
+) {
   const modeLabel = mode === "random" ? "random" : "top";
-  const loadingRes = await api.sendMessage(chatId, `⏳ <i>Fetching ${limit} ${modeLabel} images from <b>yande.re</b>...</i>`);
-  const loadingMsgId = loadingRes && loadingRes.ok && loadingRes.result && loadingRes.result.message_id ? loadingRes.result.message_id : null;
+  let loadingText = tagQuery
+    ? `⏳ <i>Searching for <b>${escapeHtml(tagQuery)}</b> (${limit} images each from yande.re &amp; Gelbooru)...</i>`
+    : `⏳ <i>Fetching ${limit} ${modeLabel} images each from <b>yande.re</b> &amp; <b>Gelbooru</b>...</i>`;
+
+  if (source === "yandere") {
+    loadingText = tagQuery
+      ? `⏳ <i>Searching yande.re for <b>${escapeHtml(tagQuery)}</b> (${limit} images)...</i>`
+      : `⏳ <i>Fetching ${limit} ${modeLabel} images from <b>yande.re</b>...</i>`;
+  } else if (source === "gelbooru") {
+    loadingText = tagQuery
+      ? `⏳ <i>Searching Gelbooru for <b>${escapeHtml(tagQuery)}</b> (${limit} images)...</i>`
+      : `⏳ <i>Fetching ${limit} ${modeLabel} images from <b>Gelbooru</b>...</i>`;
+  }
+
+  const loadingRes = await api.sendMessage(chatId, loadingText);
+  const loadingMsgId =
+    loadingRes && loadingRes.ok && loadingRes.result && loadingRes.result.message_id
+      ? loadingRes.result.message_id
+      : null;
 
   try {
-    const posts = await fetchYanderePosts(rating, limit, mode);
+    const { yanderePosts, gelbooruPosts, posts } = await fetchBooruPosts(
+      source,
+      rating,
+      limit,
+      mode,
+      gelbooruAuth,
+      tagQuery
+    );
+
     if (posts.length === 0) {
-      await api.sendMessage(chatId, `⚠️ No images found on yande.re.`);
+      if (tagQuery) {
+        const suggestions = await searchBooruTags(tagQuery, 6, gelbooruAuth, source);
+        let noFoundText = `⚠️ No images found matching: <code>${escapeHtml(tagQuery)}</code>`;
+        let replyMarkup = undefined;
+
+        if (suggestions.length > 0) {
+          noFoundText += `\n\n💡 <b>Did you mean one of these tags?</b>`;
+          const buttons = suggestions.slice(0, 4).map((s) => [
+            {
+              text: `${getTagTypeEmoji(s.type)} ${s.name} (${s.count.toLocaleString()})`,
+              callback_data: `st:${source === "yandere" ? "y" : source === "gelbooru" ? "g" : "b"}:${s.name.slice(0, 45)}`,
+            },
+          ]);
+          replyMarkup = { inline_keyboard: buttons };
+        }
+
+        if (loadingMsgId) {
+          await api.editMessageText(chatId, loadingMsgId, noFoundText, { reply_markup: replyMarkup });
+        } else {
+          await api.sendMessage(chatId, noFoundText, { reply_markup: replyMarkup });
+        }
+        return;
+      }
+
+      let noFoundText = `⚠️ No images found on yande.re.`;
+      if (source === "gelbooru") {
+        noFoundText = `⚠️ No images found on Gelbooru. Please check your GELBOORU_API_KEY and GELBOORU_USER_ID secrets.`;
+      } else if (source === "both") {
+        noFoundText = `⚠️ No images found on yande.re or Gelbooru.`;
+      }
+      if (loadingMsgId) {
+        await api.editMessageText(chatId, loadingMsgId, noFoundText);
+      } else {
+        await api.sendMessage(chatId, noFoundText);
+      }
       return;
     }
 
-    const todayDate = new Date().toISOString().split("T")[0];
-    const displayCount = Math.min(posts.length, limit);
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, "0");
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const year = now.getFullYear();
+    const formattedDate = `${day}/${month}/${year}`;
 
-    const mediaGroup = posts.slice(0, displayCount).map((post, idx) => {
-      const caption = formatPostCaption(post, idx, displayCount, todayDate, mode);
-      return {
+    // Turn "Fetching..." text into persistent banner
+    let bannerText = "";
+    if (source === "both") {
+      const yCount = yanderePosts.length;
+      const gCount = gelbooruPosts.length;
+      if (tagQuery) {
+        bannerText = `🔍 <b>"${escapeHtml(tagQuery)}" • ${yCount} yande.re + ${gCount} Gelbooru • ${formattedDate}</b>`;
+      } else {
+        bannerText =
+          mode === "random"
+            ? `🎲 <b>${yCount} yande.re + ${gCount} Gelbooru • ${formattedDate}</b>`
+            : `🌟 <b>Top ${yCount} yande.re + ${gCount} Gelbooru • ${formattedDate}</b>`;
+      }
+    } else if (source === "gelbooru") {
+      bannerText = tagQuery
+        ? `🔍 <b>"${escapeHtml(tagQuery)}" • ${posts.length} Gelbooru • ${formattedDate}</b>`
+        : (mode === "random"
+          ? `🎲 <b>${posts.length} Random images of ${formattedDate} • Gelbooru</b>`
+          : `🌟 <b>Top ${posts.length} images of ${formattedDate} • Gelbooru</b>`);
+    } else {
+      bannerText = tagQuery
+        ? `🔍 <b>"${escapeHtml(tagQuery)}" • ${posts.length} yande.re • ${formattedDate}</b>`
+        : (mode === "random"
+          ? `🎲 <b>${posts.length} Random images of ${formattedDate} • yande.re</b>`
+          : `🌟 <b>Top ${posts.length} images of ${formattedDate} • yande.re</b>`);
+    }
+
+    if (loadingMsgId) {
+      await api.editMessageText(chatId, loadingMsgId, bannerText);
+    }
+
+    const buildMediaGroup = (items) =>
+      items.map((post, idx) => ({
         type: "photo",
         media: post.imageUrl,
-        caption: caption.slice(0, 1024),
+        caption: formatPostCaption(post, idx, formattedDate, mode).slice(0, 1024),
         parse_mode: "HTML",
         has_spoiler: spoilerNsfw && post.isNsfw,
-      };
-    });
+      }));
+
+    const sendGroupBatches = async (items) => {
+      let sent = 0;
+      for (let i = 0; i < items.length; i += 10) {
+        const batch = items.slice(i, i + 10);
+        if (i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 3500));
+        }
+        sent += await sendAlbumBatch(api, chatId, batch);
+      }
+      return sent;
+    };
 
     let totalSent = 0;
 
-    for (let i = 0; i < mediaGroup.length; i += 10) {
-      const batch = mediaGroup.slice(i, i + 10);
-
-      if (i > 0) {
-        // Wait 3.5s between media groups to satisfy Telegram's media download queue & single-chat pacing
-        await new Promise((r) => setTimeout(r, 3500));
+    if (source === "both") {
+      // 1. yande.re batch
+      if (yanderePosts.length > 0) {
+        await api.sendMessage(chatId, `🌸 <b>yande.re</b> (${yanderePosts.length} images)`);
+        const yMedia = buildMediaGroup(yanderePosts);
+        totalSent += await sendGroupBatches(yMedia);
       }
 
-      const sent = await sendAlbumBatch(api, chatId, batch);
-      totalSent += sent;
+      // 2. Gelbooru batch
+      if (gelbooruPosts.length > 0) {
+        if (yanderePosts.length > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 3500));
+        }
+        await api.sendMessage(chatId, `🌀 <b>Gelbooru</b> (${gelbooruPosts.length} images)`);
+        const gMedia = buildMediaGroup(gelbooruPosts);
+        totalSent += await sendGroupBatches(gMedia);
+      }
+    } else {
+      const media = buildMediaGroup(posts);
+      totalSent += await sendGroupBatches(media);
     }
 
     if (totalSent === 0) {
-      let textSummary = mode === "random"
-        ? `🎲 <b>${displayCount} Random Images • yande.re</b>\n\n`
-        : `🌟 <b>Top ${displayCount} Today • yande.re</b>\n📅 ${todayDate}\n\n`;
-      posts.slice(0, displayCount).forEach((p, i) => {
-        textSummary += `${i + 1}. <a href="${p.postUrl}">Post #${p.id}</a> - Score: ${p.score}\n`;
+      let textSummary = `${bannerText}\n\n`;
+      posts.forEach((p, i) => {
+        const srcName = p.source === "gelbooru" ? "Gelbooru" : "yande.re";
+        textSummary += `${i + 1}. <a href="${p.postUrl}">${srcName} #${p.id}</a> - Score: ${p.score}\n`;
       });
       await api.sendMessage(chatId, textSummary, { disable_web_page_preview: false });
     }
   } catch (err) {
     console.error("sendBooruPostsToChat error:", err);
-    await api.sendMessage(chatId, `❌ Failed to load images: ${escapeHtml(err.message || "Unknown error")}`);
-  } finally {
+    const errText = `❌ Failed to load images: ${escapeHtml(err.message || "Unknown error")}`;
     if (loadingMsgId) {
-      await api.deleteMessage(chatId, loadingMsgId);
+      await api.editMessageText(chatId, loadingMsgId, errText);
+    } else {
+      await api.sendMessage(chatId, errText);
     }
   }
 }
 
-function parseCommandArgs(args, defaultRating, defaultLimit, defaultSpoiler = false) {
+function parseCommandArgs(args, defaultRating, defaultLimit, defaultSpoiler = false, defaultSource) {
   let rating = defaultRating;
   let limit = defaultLimit;
   let spoilerNsfw = defaultSpoiler;
+  let source = defaultSource;
 
   for (const arg of args) {
     const lower = arg.toLowerCase();
     if (lower === "nsfw") rating = "nsfw";
     else if (lower === "sfw") rating = "sfw";
-    else if (lower === "all" || lower === "both") rating = "all";
-    else if (lower === "nospoiler" || lower === "unspoiler" || lower === "clean") spoilerNsfw = false;
-    else if (lower === "spoiler" || lower === "blur") spoilerNsfw = true;
-    else {
+    else if (lower === "all") rating = "all";
+    else if (lower === "both") source = "both";
+    else if (lower === "yan" || lower === "yandere") source = "yandere";
+    else if (lower === "gel" || lower === "gelbooru") source = "gelbooru";
+    else if (lower === "nospoiler" || lower === "unspoiler" || lower === "clean" || lower === "nospoil") {
+      spoilerNsfw = false;
+    } else if (lower === "spoiler" || lower === "blur") {
+      spoilerNsfw = true;
+    } else {
       const num = parseInt(lower, 10);
       if (!isNaN(num) && num > 0 && num <= 50) limit = num;
     }
   }
 
-  return { rating, limit, spoilerNsfw };
+  return { rating, limit, spoilerNsfw, source };
+}
+
+function parseSearchCommandArgs(
+  args,
+  defaultRating,
+  defaultLimit,
+  defaultSpoiler,
+  defaultSource
+) {
+  let rating = defaultRating;
+  let limit = defaultLimit;
+  let spoilerNsfw = defaultSpoiler;
+  let source = defaultSource;
+  const queryParts = [];
+
+  for (const arg of args) {
+    const lower = arg.toLowerCase();
+    if (lower === "nsfw") rating = "nsfw";
+    else if (lower === "sfw") rating = "sfw";
+    else if (lower === "all") rating = "all";
+    else if (lower === "both") source = "both";
+    else if (lower === "yan" || lower === "yandere") source = "yandere";
+    else if (lower === "gel" || lower === "gelbooru") source = "gelbooru";
+    else if (
+      lower === "nospoiler" ||
+      lower === "unspoiler" ||
+      lower === "clean" ||
+      lower === "nospoil"
+    ) {
+      spoilerNsfw = false;
+    } else if (lower === "spoiler" || lower === "blur") {
+      spoilerNsfw = true;
+    } else {
+      const num = parseInt(lower, 10);
+      if (!isNaN(num) && num > 0 && num <= 50) {
+        limit = num;
+      } else {
+        queryParts.push(arg);
+      }
+    }
+  }
+
+  return { queryParts, rating, limit, spoilerNsfw, source };
+}
+
+function parseTagCommandArgs(args, defaultSource) {
+  let source = defaultSource;
+  const queryParts = [];
+
+  for (const arg of args) {
+    const lower = arg.toLowerCase();
+    if (lower === "both") source = "both";
+    else if (lower === "yan" || lower === "yandere") source = "yandere";
+    else if (lower === "gel" || lower === "gelbooru") source = "gelbooru";
+    else {
+      queryParts.push(arg);
+    }
+  }
+
+  return { query: queryParts.join(" ").trim(), source };
 }
 
 const DEFAULT_BOT_COMMANDS = [
   { command: "today", description: "🌟 Top popular images of the day" },
+  { command: "search", description: "🔍 Search tag or character" },
+  { command: "tags", description: "🏷️ Tag autocomplete & search" },
   { command: "random", description: "🎲 Random anime images" },
+  { command: "both", description: "🌐 Fetch from yande.re + Gelbooru" },
+  { command: "yan", description: "🌸 Fetch from yande.re" },
+  { command: "gel", description: "🌀 Fetch from Gelbooru" },
   { command: "settings", description: "⚙️ Configuration & quick panel" },
   { command: "myid", description: "🆔 Your Telegram Chat ID" },
   { command: "help", description: "📖 Help & command reference" },
@@ -807,6 +1300,7 @@ async function handleTelegramMessage(message, env) {
   const [command, ...args] = text.split(/\s+/);
   const cmd = command.toLowerCase().replace(/@.+$/, "");
   const config = getConfig(env);
+  const gelAuth = { apiKey: config.gelbooruApiKey, userId: config.gelbooruUserId };
 
   switch (cmd) {
     case "/start": {
@@ -816,15 +1310,19 @@ async function handleTelegramMessage(message, env) {
       await api.sendMessage(
         chat.id,
         `🌸 <b>Scene</b>\n\n` +
-          `Daily & on-demand anime art from <b>yande.re</b>.\n\n` +
+          `Daily & on-demand anime art from <b>yande.re</b> and <b>Gelbooru</b>.\n\n` +
           `<b>Available Commands:</b>\n` +
-          `• <code>/today [count] [rating]</code> - Fetch top images (defaults to ${config.limit})\n` +
+          `• <code>/today [count] [rating]</code> - Fetch top images (active source: ${config.source})\n` +
+          `• <code>/search &lt;tag/character&gt;</code> - Search specific tag or character (alias: <code>/s</code>)\n` +
+          `• <code>/tags &lt;query&gt;</code> - Check tag names & per-source counts (alias: <code>/find</code>)\n` +
+          `• <code>/both [count] [rating]</code> - Fetch from both yande.re & Gelbooru\n` +
+          `• <code>/yan [count] [rating]</code> - Fetch from yande.re\n` +
+          `• <code>/gel [count] [rating]</code> - Fetch from Gelbooru\n` +
           `• <code>/random [count] [rating]</code> - Fetch random images\n` +
-          `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n` +
-          `• <code>/settings</code> - View active configuration\n` +
+          `• <code>/settings</code> - View active configuration & quick panel\n` +
           `• <code>/myid</code> - View your Telegram Chat ID\n` +
           `• <code>/help</code> - Command reference\n\n` +
-          `💡 <i>Tap the <b>[Menu]</b> button on the left of your message box for instant quick access to all commands!</i>`
+          `💡 <i>Tip: Use <code>/tags &lt;query&gt;</code> to browse tags with 1-click search buttons!</i>`
       );
       break;
     }
@@ -833,21 +1331,231 @@ async function handleTelegramMessage(message, env) {
       await api.sendMessage(
         chat.id,
         `📖 <b>Help & Command Reference</b>\n\n` +
-          `<b>Fetch Commands:</b>\n` +
-          `• <code>/today [count] [rating]</code> - Pull top images (e.g. <code>/today</code>, <code>/today 15</code>, <code>/today 30 nsfw</code>)\n` +
-          `• <code>/random [count] [rating]</code> - Pull random images (e.g. <code>/random</code>, <code>/random 30 sfw</code>)\n` +
-          `• <code>/yan [count] [rating]</code> - Shortcut for yande.re\n\n` +
+          `<b>Search & Tags:</b>\n` +
+          `• <code>/search &lt;tag&gt; [count] [rating] [source]</code> (alias: <code>/s</code>)\n` +
+          `  <i>e.g. <code>/search hu_tao</code>, <code>/s firefly 15 nsfw yan</code>, <code>/s raiden both</code></i>\n` +
+          `  <i>Specify <code>yan</code>, <code>gel</code>, or <code>both</code> to choose source (defaults to active source).</i>\n` +
+          `• <code>/tags &lt;query&gt; [source]</code> - Find tag names & per-source counts (alias: <code>/find</code>)\n` +
+          `  <i>e.g. <code>/tags hu</code>, <code>/tags firefly yan</code>, <code>/tags raiden gel</code></i>\n\n` +
+          `<b>Browse Commands:</b>\n` +
+          `• <code>/today [count] [rating]</code> - Pull top images of the day\n` +
+          `• <code>/both [count] [rating]</code> - Pull from both yande.re & Gelbooru\n` +
+          `• <code>/yan [count] [rating]</code> - Pull from yande.re\n` +
+          `• <code>/gel [count] [rating]</code> - Pull from Gelbooru\n` +
+          `• <code>/random [count] [rating]</code> - Pull random images\n\n` +
           `<b>Info & Diagnostics:</b>\n` +
-          `• <code>/settings</code> - Inspect active environment variables\n` +
+          `• <code>/settings</code> - Inspect active environment variables & quick buttons\n` +
           `• <code>/myid</code> - View your Telegram Chat ID`
       );
       break;
     }
 
+    case "/search":
+    case "/s":
+    case "/tag":
+    case "/char":
+    case "/character": {
+      if (args.length === 0) {
+        await api.sendMessage(
+          chat.id,
+          `🔍 <b>Tag & Character Search</b>\n\n` +
+            `Usage: <code>/search &lt;tag or character&gt; [count] [rating] [source]</code>\n\n` +
+            `<b>How Source Selection Works:</b>\n` +
+            `• Default: Uses active bot source (<b>${config.source}</b>)\n` +
+            `• <code>both</code>: Searches both yande.re &amp; Gelbooru\n` +
+            `• <code>yan</code>: Searches yande.re only\n` +
+            `• <code>gel</code>: Searches Gelbooru only\n\n` +
+            `<b>Examples:</b>\n` +
+            `• <code>/search hu_tao</code> (active: ${config.source})\n` +
+            `• <code>/search hu_tao both</code>\n` +
+            `• <code>/search firefly 15 nsfw yan</code>\n` +
+            `• <code>/search marin_kitagawa 20 sfw gel</code>\n\n` +
+            `💡 <i>Tip: Use <code>/tags &lt;query&gt;</code> to check if a tag exists on yande.re or Gelbooru!</i>`
+        );
+        break;
+      }
+
+      const { queryParts, rating, limit, spoilerNsfw, source } = parseSearchCommandArgs(
+        args,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        config.source
+      );
+      const tagQuery = queryParts.join("_");
+
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        rating,
+        limit,
+        spoilerNsfw,
+        "top",
+        source,
+        gelAuth,
+        tagQuery
+      );
+      break;
+    }
+
+    case "/tags":
+    case "/find":
+    case "/autocomplete": {
+      const { query, source } = parseTagCommandArgs(args, config.source);
+      if (!query) {
+        await api.sendMessage(
+          chat.id,
+          `🏷️ <b>Tag & Character Lookup</b>\n\n` +
+            `Usage: <code>/tags &lt;query&gt; [source]</code>\n\n` +
+            `<b>Examples:</b>\n` +
+            `• <code>/tags hu</code> (searches active source: ${config.source})\n` +
+            `• <code>/tags firefly yan</code> (searches yande.re)\n` +
+            `• <code>/tags genshin gel</code> (searches Gelbooru)\n` +
+            `• <code>/tags raiden both</code> (searches both)`
+        );
+        break;
+      }
+
+      const sourceLabel =
+        source === "both"
+          ? "Both (yande.re + Gelbooru) 🌐"
+          : source === "gelbooru"
+          ? "Gelbooru 🌀"
+          : "yande.re 🌸";
+
+      const tags = await searchBooruTags(query, 10, gelAuth, source);
+      if (tags.length === 0) {
+        await api.sendMessage(
+          chat.id,
+          `⚠️ No tags found matching <code>${escapeHtml(query)}</code> on ${sourceLabel}.`
+        );
+        break;
+      }
+
+      let listText = `🏷️ <b>Matching Tags for "${escapeHtml(query)}"</b>\n`;
+      listText += `📡 <b>Source:</b> ${sourceLabel}\n\n`;
+
+      const buttons = [];
+
+      tags.forEach((t, i) => {
+        const emoji = getTagTypeEmoji(t.type);
+        const label = getTagTypeLabel(t.type);
+
+        let countLine = "";
+        if (source === "both") {
+          const yanCount = t.yandereCount !== undefined ? t.yandereCount.toLocaleString() : "0";
+          const gelCount = t.gelbooruCount !== undefined ? t.gelbooruCount.toLocaleString() : "0";
+          countLine = `\n   └ 🌸 yande.re: <b>${yanCount}</b> • 🌀 Gelbooru: <b>${gelCount}</b>`;
+        } else if (source === "yandere") {
+          countLine = ` • ${t.count.toLocaleString()} posts`;
+        } else {
+          countLine = ` • ${t.count.toLocaleString()} posts`;
+        }
+
+        listText += `${i + 1}. ${emoji} <code>${t.name}</code> (${label})${countLine}\n`;
+
+        if (i < 5) {
+          if (source === "both") {
+            buttons.push([
+              {
+                text: `🌐 Both: ${t.name}`,
+                callback_data: `st:b:${t.name.slice(0, 45)}`,
+              },
+              {
+                text: `🌸 yan`,
+                callback_data: `st:y:${t.name.slice(0, 45)}`,
+              },
+              {
+                text: `🌀 gel`,
+                callback_data: `st:g:${t.name.slice(0, 45)}`,
+              },
+            ]);
+          } else if (source === "yandere") {
+            buttons.push([
+              {
+                text: `🌸 Search ${t.name} (${t.count.toLocaleString()})`,
+                callback_data: `st:y:${t.name.slice(0, 45)}`,
+              },
+            ]);
+          } else {
+            buttons.push([
+              {
+                text: `🌀 Search ${t.name} (${t.count.toLocaleString()})`,
+                callback_data: `st:g:${t.name.slice(0, 45)}`,
+              },
+            ]);
+          }
+        }
+      });
+
+      listText += `\n<i>Tap a button below to search instantly:</i>`;
+
+      await api.sendMessage(chat.id, listText, {
+        reply_markup: { inline_keyboard: buttons },
+      });
+      break;
+    }
+
     case "/random":
     case "/rand": {
-      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw);
-      await sendBooruPostsToChat(api, chat.id, parsed.rating, parsed.limit, parsed.spoilerNsfw, "random");
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw, config.source);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        parsed.rating,
+        parsed.limit,
+        parsed.spoilerNsfw,
+        "random",
+        parsed.source || config.source,
+        gelAuth
+      );
+      break;
+    }
+
+    case "/yan":
+    case "/yandere": {
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw, "yandere");
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        parsed.rating,
+        parsed.limit,
+        parsed.spoilerNsfw,
+        "top",
+        "yandere",
+        gelAuth
+      );
+      break;
+    }
+
+    case "/gel":
+    case "/gelbooru": {
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw, "gelbooru");
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        parsed.rating,
+        parsed.limit,
+        parsed.spoilerNsfw,
+        "top",
+        "gelbooru",
+        gelAuth
+      );
+      break;
+    }
+
+    case "/both": {
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw, "both");
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        parsed.rating,
+        parsed.limit,
+        parsed.spoilerNsfw,
+        "top",
+        "both",
+        gelAuth
+      );
       break;
     }
 
@@ -856,13 +1564,20 @@ async function handleTelegramMessage(message, env) {
     case "/top10":
     case "/top15":
     case "/top30":
-    case "/yan":
-    case "/yandere":
     case "/test_cron":
     case "/runcron":
     case "/cron": {
-      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw);
-      await sendBooruPostsToChat(api, chat.id, parsed.rating, parsed.limit, parsed.spoilerNsfw, "top");
+      const parsed = parseCommandArgs(args, config.rating, config.limit, config.spoilerNsfw, config.source);
+      await sendBooruPostsToChat(
+        api,
+        chat.id,
+        parsed.rating,
+        parsed.limit,
+        parsed.spoilerNsfw,
+        "top",
+        parsed.source || config.source,
+        gelAuth
+      );
       break;
     }
 
@@ -882,6 +1597,11 @@ async function handleTelegramMessage(message, env) {
             [
               { text: "🛡️ Top 10 SFW", callback_data: "fetch_sfw" },
               { text: "⚠️ Top 10 NSFW", callback_data: "fetch_nsfw" },
+            ],
+            [
+              { text: "🌸 yande.re", callback_data: "fetch_yan" },
+              { text: "🌀 Gelbooru", callback_data: "fetch_gel" },
+              { text: "🌐 Both Sources", callback_data: "fetch_both" },
             ],
           ],
         },
@@ -903,7 +1623,10 @@ async function handleTelegramMessage(message, env) {
 
     default:
       if (text.startsWith("/")) {
-        await api.sendMessage(chat.id, `ℹ️ Unknown command: <code>${escapeHtml(cmd)}</code>\nUse /today or /random to fetch images, or /help for commands.`);
+        await api.sendMessage(
+          chat.id,
+          `ℹ️ Unknown command: <code>${escapeHtml(cmd)}</code>\nUse /today, /search, /tags, /both, /yan, /gel, /random, or /help.`
+        );
       }
       break;
   }
@@ -921,26 +1644,127 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
   }
 
   const config = getConfig(env);
+  const gelAuth = { apiKey: config.gelbooruApiKey, userId: config.gelbooruUserId };
+
+  if (
+    callbackQuery.data &&
+    (callbackQuery.data.startsWith("st:") || callbackQuery.data.startsWith("search_tag:"))
+  ) {
+    let targetSource = config.source;
+    let tag = "";
+
+    if (callbackQuery.data.startsWith("st:")) {
+      const parts = callbackQuery.data.split(":");
+      const srcCode = parts[1];
+      tag = parts.slice(2).join(":");
+      if (srcCode === "y") targetSource = "yandere";
+      else if (srcCode === "g") targetSource = "gelbooru";
+      else if (srcCode === "b") targetSource = "both";
+    } else {
+      tag = callbackQuery.data.slice("search_tag:".length);
+    }
+
+    const srcLabel =
+      targetSource === "both"
+        ? "both sources"
+        : targetSource === "gelbooru"
+        ? "Gelbooru"
+        : "yande.re";
+
+    await api.answerCallbackQuery(callbackQuery.id, `Searching ${srcLabel} for ${tag}...`);
+    await sendBooruPostsToChat(
+      api,
+      msg.chat.id,
+      config.rating,
+      config.limit,
+      config.spoilerNsfw,
+      "top",
+      targetSource,
+      gelAuth,
+      tag
+    );
+    return;
+  }
 
   switch (callbackQuery.data) {
     case "fetch_top": {
       await api.answerCallbackQuery(callbackQuery.id, `Fetching top ${config.limit}...`);
-      await sendBooruPostsToChat(api, msg.chat.id, config.rating, config.limit, config.spoilerNsfw, "top");
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        "top",
+        config.source,
+        gelAuth
+      );
       break;
     }
     case "fetch_random": {
       await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} random images...`);
-      await sendBooruPostsToChat(api, msg.chat.id, config.rating, config.limit, config.spoilerNsfw, "random");
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        "random",
+        config.source,
+        gelAuth
+      );
       break;
     }
     case "fetch_sfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 SFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top");
+      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top", config.source, gelAuth);
       break;
     }
     case "fetch_nsfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 NSFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top");
+      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top", config.source, gelAuth);
+      break;
+    }
+    case "fetch_yan": {
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} images from yande.re...`);
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        config.mode,
+        "yandere",
+        gelAuth
+      );
+      break;
+    }
+    case "fetch_gel": {
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} images from Gelbooru...`);
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        config.mode,
+        "gelbooru",
+        gelAuth
+      );
+      break;
+    }
+    case "fetch_both": {
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} images each from both sources...`);
+      await sendBooruPostsToChat(
+        api,
+        msg.chat.id,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        config.mode,
+        "both",
+        gelAuth
+      );
       break;
     }
     default:
@@ -952,6 +1776,7 @@ async function handleScheduledBroadcast(env) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
   const config = getConfig(env);
+  const gelAuth = { apiKey: config.gelbooruApiKey, userId: config.gelbooruUserId };
 
   const targets = new Set();
   if (config.ownerChatId) targets.add(config.ownerChatId);
@@ -960,7 +1785,16 @@ async function handleScheduledBroadcast(env) {
   let sentCount = 0;
   for (const chatId of targets) {
     try {
-      await sendBooruPostsToChat(api, chatId, config.rating, config.limit, config.spoilerNsfw, config.mode);
+      await sendBooruPostsToChat(
+        api,
+        chatId,
+        config.rating,
+        config.limit,
+        config.spoilerNsfw,
+        config.mode,
+        config.source,
+        gelAuth
+      );
       sentCount++;
     } catch (err) {
       console.error(`Daily broadcast failed for chat ${chatId}:`, err);
@@ -979,7 +1813,7 @@ export default {
         JSON.stringify({
           status: "healthy",
           bot: "Scene Telegram Bot",
-          source: "yandere",
+          source: env.DEFAULT_SOURCE || "both",
           owner: env.OWNER_USERNAME || DEFAULT_CONFIG.OWNER_USERNAME,
           timestamp: new Date().toISOString(),
         }),
