@@ -56,7 +56,10 @@ export async function fetchGelbooruPosts(
   }
 
   // 2. Delivery mode tag
-  if (mode === "random") {
+  // Gelbooru does not have a "daily top" endpoint like yande.re.
+  // sort:score:desc returns all-time highest posts across 15+ years (stale & repetitive).
+  // Therefore, Gelbooru always defaults to sort:random unless a specific tag search requests top.
+  if (mode === "random" || !tagQuery) {
     tags.push("sort:random");
   } else {
     tags.push("sort:score:desc");

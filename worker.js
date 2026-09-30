@@ -97,9 +97,9 @@ function formatSettingsText(config) {
   const modeText = config.mode === "random" ? "Random Images 🎲" : "Top Popular Today 🌟";
   const sourceText =
     config.source === "both"
-      ? "Both (yande.re + Gelbooru) 🌐"
+      ? "Both (yande.re Top + Gelbooru Random) 🌐"
       : config.source === "gelbooru"
-      ? "Gelbooru 🌀"
+      ? "Gelbooru (Random) 🌀"
       : "yande.re 🌸";
   const countText =
     config.source === "both"
@@ -454,7 +454,7 @@ async function fetchGelbooruPosts(ratingFilter, limit = 30, mode = "top", apiKey
   if (ratingFilter === "sfw") tags.push("rating:general");
   else if (ratingFilter === "nsfw") tags.push("-rating:general");
 
-  if (mode === "random") tags.push("sort:random");
+  if (mode === "random" || !tagQuery) tags.push("sort:random");
   else tags.push("sort:score:desc");
 
   const queryParams = new URLSearchParams({
@@ -1105,9 +1105,7 @@ async function sendBooruPostsToChat(
     } else if (source === "gelbooru") {
       bannerText = tagQuery
         ? `🔍 <b>"${escapeHtml(tagQuery)}" • ${posts.length} Gelbooru • ${formattedDate}</b>`
-        : (mode === "random"
-          ? `🎲 <b>${posts.length} Random images of ${formattedDate} • Gelbooru</b>`
-          : `🌟 <b>Top ${posts.length} images of ${formattedDate} • Gelbooru</b>`);
+        : `🎲 <b>${posts.length} Random images • Gelbooru • ${formattedDate}</b>`;
     } else {
       bannerText = tagQuery
         ? `🔍 <b>"${escapeHtml(tagQuery)}" • ${posts.length} yande.re • ${formattedDate}</b>`
@@ -1273,12 +1271,11 @@ function parseTagCommandArgs(args, defaultSource) {
 
 const DEFAULT_BOT_COMMANDS = [
   { command: "today", description: "🌟 Top popular images of the day" },
-  { command: "search", description: "🔍 Search tag or character" },
-  { command: "tags", description: "🏷️ Tag autocomplete & search" },
+  { command: "search", description: "🔍 Search tag (live autocomplete)" },
   { command: "random", description: "🎲 Random anime images" },
   { command: "both", description: "🌐 Fetch from yande.re + Gelbooru" },
   { command: "yan", description: "🌸 Fetch from yande.re" },
-  { command: "gel", description: "🌀 Fetch from Gelbooru" },
+  { command: "gel", description: "🌀 Random from Gelbooru" },
   { command: "settings", description: "⚙️ Configuration & quick panel" },
   { command: "myid", description: "🆔 Your Telegram Chat ID" },
   { command: "help", description: "📖 Help & command reference" },
@@ -1562,7 +1559,7 @@ async function handleTelegramMessage(message, env) {
         parsed.rating,
         parsed.limit,
         parsed.spoilerNsfw,
-        "top",
+        "random",
         "gelbooru",
         gelAuth
       );
@@ -1631,7 +1628,7 @@ async function handleTelegramMessage(message, env) {
             ],
             [
               { text: "🌸 yande.re", callback_data: "fetch_yan" },
-              { text: "🌀 Gelbooru", callback_data: "fetch_gel" },
+              { text: "🌀 Gelbooru (Random)", callback_data: "fetch_gel" },
               { text: "🌐 Both Sources", callback_data: "fetch_both" },
             ],
           ],
@@ -1771,14 +1768,14 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
       break;
     }
     case "fetch_gel": {
-      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} images from Gelbooru...`);
+      await api.answerCallbackQuery(callbackQuery.id, `Fetching ${config.limit} random images from Gelbooru...`);
       await sendBooruPostsToChat(
         api,
         msg.chat.id,
         config.rating,
         config.limit,
         config.spoilerNsfw,
-        config.mode,
+        "random",
         "gelbooru",
         gelAuth
       );
