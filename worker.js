@@ -860,9 +860,20 @@ async function sendBooruPostsToChat(
     const year = now.getFullYear();
     const formattedDate = `${day}/${month}/${year}`;
 
-    // Auto-delete the loading message so delivery starts clean
+    let bannerText = "";
+    if (tagQuery) {
+      bannerText = `🔍 <b>"${escapeHtml(tagQuery)}" • ${posts.length} yande.re • ${formattedDate}</b>`;
+    } else {
+      bannerText =
+        mode === "random"
+          ? `🎲 <b>${posts.length} Random images of ${formattedDate} • yande.re</b>`
+          : `🌟 <b>Top ${posts.length} yande.re • ${formattedDate}</b>`;
+    }
+
     if (loadingMsgId) {
-      await api.deleteMessage(chatId, loadingMsgId);
+      await api.editMessageText(chatId, loadingMsgId, bannerText);
+    } else {
+      await api.sendMessage(chatId, bannerText);
     }
 
     const buildMediaGroup = (items) =>
