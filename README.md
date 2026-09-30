@@ -27,8 +27,10 @@ A serverless Telegram bot hosted on **Cloudflare Workers** delivering top daily 
 | Command | Description |
 | :--- | :--- |
 | `/start` | Welcome and quick start guide |
-| `/today [count] [sfw\|nsfw\|all]` | Fetch top images (defaults to 30, ALL rating) |
-| `/yan [count] [sfw\|nsfw\|all]` | Shortcut for yande.re top images |
+| `/today [count] [rating]` | Fetch top images (defaults to 30, ALL rating) |
+| `/search <tag> [count] [rating]` | Search specific tag, character, or artist (alias: `/s`) |
+| `@s <tag>` | Real-time tag autocomplete right in chat message box |
+| `/random [count] [rating]` | Fetch random anime art from yande.re |
 | `/settings` | View active configuration and quick-action buttons |
 | `/myid` | View your Telegram Chat ID (`1368225736`) |
 | `/test_cron` | Test the 8:00 AM scheduled delivery immediately |
@@ -48,7 +50,6 @@ Configure defaults directly in Cloudflare Dashboard under **Workers & Pages ➔ 
 | `DEFAULT_LIMIT` | Variable | `30` | Default number of images |
 | `DEFAULT_RATING` | Variable | `all` | `all`, `sfw`, or `nsfw` |
 | `DEFAULT_SPOILER_NSFW` | Variable | `false` | `false` = unblurred, `true` = blurred |
-| `DEFAULT_SOURCE` | Variable | `yandere` | Default booru source |
 
 ---
 

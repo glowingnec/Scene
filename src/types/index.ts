@@ -1,4 +1,3 @@
-export type BooruSource = "yandere" | "gelbooru" | "both";
 export type RatingFilter = "sfw" | "nsfw" | "all";
 export type DeliveryMode = "top" | "random";
 
@@ -7,20 +6,17 @@ export interface Env {
   OWNER_USERNAME?: string;
   OWNER_CHAT_ID?: string;
   CHANNEL_ID?: string;
-  DEFAULT_SOURCE?: string;
   DEFAULT_RATING?: string;
   DEFAULT_LIMIT?: string;
   DEFAULT_MODE?: string;
   DELIVERY_MODE?: string;
   DEFAULT_SPOILER_NSFW?: string;
   SECRET_TOKEN?: string;
-  GELBOORU_API_KEY?: string;
-  GELBOORU_USER_ID?: string;
 }
 
 export interface BooruPost {
   id: number | string;
-  source: "yandere" | "gelbooru";
+  source: "yandere";
   imageUrl: string;
   postUrl: string;
   sourceUrl?: string;
@@ -34,15 +30,12 @@ export interface BooruPost {
 }
 
 export interface BotSettings {
-  source: BooruSource;
   rating: RatingFilter;
   mode: DeliveryMode;
   limit: number;
   ownerChatId?: number | string;
   subscribedChatIds: (number | string)[];
   spoilerNsfw: boolean;
-  gelbooruApiKey?: string;
-  gelbooruUserId?: string;
 }
 
 export interface TelegramUser {
@@ -107,10 +100,7 @@ export interface TelegramUpdate {
 export interface BooruTagSuggestion {
   name: string;
   count: number;
-  yandereCount?: number;
-  gelbooruCount?: number;
   type: number;
-  source: "yandere" | "gelbooru" | "both";
 }
 
 export interface InputMediaPhoto {
