@@ -237,20 +237,25 @@ async function sendAlbumBatch(
   let sendResult = await api.sendMediaGroup(chatId, items);
 
   if (!sendResult.ok) {
-    const waitMs1 = sendResult.parameters?.retry_after
-      ? (sendResult.parameters.retry_after + 1) * 1000
-      : 3500;
-    console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs1}ms for retry 1...`);
-    await new Promise((r) => setTimeout(r, waitMs1));
-    sendResult = await api.sendMediaGroup(chatId, items);
+    const desc = sendResult.description || "";
+    const isUrlFailure = desc.includes("failed to get HTTP URL content") || desc.includes("wrong file identifier");
 
-    if (!sendResult.ok) {
-      const waitMs2 = sendResult.parameters?.retry_after
+    if (!isUrlFailure) {
+      const waitMs1 = sendResult.parameters?.retry_after
         ? (sendResult.parameters.retry_after + 1) * 1000
-        : 4500;
-      console.warn(`Album batch retry 1 failed (${sendResult.description}). Waiting ${waitMs2}ms for retry 2...`);
-      await new Promise((r) => setTimeout(r, waitMs2));
+        : 3500;
+      console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs1}ms for retry 1...`);
+      await new Promise((r) => setTimeout(r, waitMs1));
       sendResult = await api.sendMediaGroup(chatId, items);
+
+      if (!sendResult.ok) {
+        const waitMs2 = sendResult.parameters?.retry_after
+          ? (sendResult.parameters.retry_after + 1) * 1000
+          : 4500;
+        console.warn(`Album batch retry 1 failed (${sendResult.description}). Waiting ${waitMs2}ms for retry 2...`);
+        await new Promise((r) => setTimeout(r, waitMs2));
+        sendResult = await api.sendMediaGroup(chatId, items);
+      }
     }
   }
 
@@ -456,7 +461,8 @@ export async function sendBooruPostsToChat(
   mode: DeliveryMode = "top",
   source: BooruSource = "both",
   gelbooruAuth?: { apiKey?: string; userId?: string },
-  tagQuery?: string
+  tagQuery?: string,
+  workerOrigin?: string
 ): Promise<void> {
   const modeLabel = mode === "random" ? "random" : "top";
   let loadingText = tagQuery
@@ -565,13 +571,19 @@ export async function sendBooruPostsToChat(
     }
 
     const buildMediaGroup = (items: BooruPost[]) =>
-      items.map((post, idx) => ({
-        type: "photo" as const,
-        media: post.imageUrl,
-        caption: formatPostCaption(post, idx, formattedDate, mode).slice(0, 1024),
-        parse_mode: "HTML" as const,
-        has_spoiler: spoilerNsfw && post.isNsfw,
-      }));
+      items.map((post, idx) => {
+        let mediaUrl = post.imageUrl;
+        if (post.source === "gelbooru" && workerOrigin) {
+          mediaUrl = `${workerOrigin}/image.jpg?url=${encodeURIComponent(post.imageUrl)}`;
+        }
+        return {
+          type: "photo" as const,
+          media: mediaUrl,
+          caption: formatPostCaption(post, idx, formattedDate, mode).slice(0, 1024),
+          parse_mode: "HTML" as const,
+          has_spoiler: spoilerNsfw && post.isNsfw,
+        };
+      });
 
     const sendGroupBatches = async (items: InputMediaPhoto[]) => {
       let sent = 0;
@@ -646,7 +658,8 @@ export const DEFAULT_BOT_COMMANDS = [
  */
 export async function handleTelegramMessage(
   message: TelegramMessage,
-  env: Env
+  env: Env,
+  workerOrigin?: string
 ): Promise<void> {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
@@ -769,7 +782,8 @@ export async function handleTelegramMessage(
         "top",
         source,
         gelAuth,
-        tagQuery
+        tagQuery,
+        workerOrigin
       );
       break;
     }
@@ -896,7 +910,9 @@ export async function handleTelegramMessage(
         parsed.spoilerNsfw,
         "random",
         parsed.source || config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -912,7 +928,9 @@ export async function handleTelegramMessage(
         parsed.spoilerNsfw,
         "top",
         "yandere",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -928,7 +946,9 @@ export async function handleTelegramMessage(
         parsed.spoilerNsfw,
         "random",
         "gelbooru",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -943,7 +963,9 @@ export async function handleTelegramMessage(
         parsed.spoilerNsfw,
         "top",
         "both",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -965,7 +987,9 @@ export async function handleTelegramMessage(
         parsed.spoilerNsfw,
         "top",
         parsed.source || config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1033,7 +1057,8 @@ export async function handleTelegramMessage(
  */
 export async function handleTelegramCallbackQuery(
   callbackQuery: TelegramCallbackQuery,
-  env: Env
+  env: Env,
+  workerOrigin?: string
 ): Promise<void> {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
@@ -1083,7 +1108,8 @@ export async function handleTelegramCallbackQuery(
       "top",
       targetSource,
       gelAuth,
-      tag
+      tag,
+      workerOrigin
     );
     return;
   }
@@ -1099,7 +1125,9 @@ export async function handleTelegramCallbackQuery(
         config.spoilerNsfw,
         "top",
         config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1114,20 +1142,22 @@ export async function handleTelegramCallbackQuery(
         config.spoilerNsfw,
         "random",
         config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
 
     case "fetch_sfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 SFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top", config.source, gelAuth);
+      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top", config.source, gelAuth, undefined, workerOrigin);
       break;
     }
 
     case "fetch_nsfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 NSFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top", config.source, gelAuth);
+      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top", config.source, gelAuth, undefined, workerOrigin);
       break;
     }
 
@@ -1141,7 +1171,9 @@ export async function handleTelegramCallbackQuery(
         config.spoilerNsfw,
         config.mode,
         "yandere",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1156,7 +1188,9 @@ export async function handleTelegramCallbackQuery(
         config.spoilerNsfw,
         "random",
         "gelbooru",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1171,7 +1205,9 @@ export async function handleTelegramCallbackQuery(
         config.spoilerNsfw,
         config.mode,
         "both",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1185,7 +1221,7 @@ export async function handleTelegramCallbackQuery(
  * Daily Scheduled Broadcast Execution.
  * Pushes anime art from yande.re / Gelbooru directly to the owner at 8:00 AM UTC+7 (follows DEFAULT_MODE).
  */
-export async function handleScheduledBroadcast(env: Env): Promise<string> {
+export async function handleScheduledBroadcast(env: Env, workerOrigin?: string): Promise<string> {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
   const config = getConfig(env);
@@ -1206,7 +1242,9 @@ export async function handleScheduledBroadcast(env: Env): Promise<string> {
         config.spoilerNsfw,
         config.mode,
         config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin || env.WORKER_URL
       );
       sentCount++;
     } catch (err) {

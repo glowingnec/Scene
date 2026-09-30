@@ -504,8 +504,13 @@ async function fetchGelbooruPosts(ratingFilter, limit = 30, mode = "top", apiKey
       if (ratingFilter === "sfw" && isNsfw) continue;
       if (ratingFilter === "nsfw" && !isNsfw) continue;
 
-      const imageUrl = post.sample_url || post.file_url;
+      let imageUrl = post.sample_url || post.file_url;
+      if (!imageUrl && post.directory && post.image) {
+        imageUrl = `https://img3.gelbooru.com/images/${post.directory}/${post.image}`;
+      }
       if (!imageUrl) continue;
+      if (imageUrl.startsWith("//")) imageUrl = `https:${imageUrl}`;
+      if (imageUrl.startsWith("http://")) imageUrl = imageUrl.replace(/^http:\/\//i, "https://");
 
       const lowerImg = imageUrl.toLowerCase();
       if (lowerImg.endsWith(".mp4") || lowerImg.endsWith(".webm") || lowerImg.endsWith(".zip")) continue;
@@ -802,20 +807,25 @@ async function sendAlbumBatch(api, chatId, items) {
   let sendResult = await api.sendMediaGroup(chatId, items);
 
   if (!sendResult.ok) {
-    const waitMs1 = sendResult.parameters?.retry_after
-      ? (sendResult.parameters.retry_after + 1) * 1000
-      : 3500;
-    console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs1}ms for retry 1...`);
-    await new Promise((r) => setTimeout(r, waitMs1));
-    sendResult = await api.sendMediaGroup(chatId, items);
+    const desc = sendResult.description || "";
+    const isUrlFailure = desc.includes("failed to get HTTP URL content") || desc.includes("wrong file identifier");
 
-    if (!sendResult.ok) {
-      const waitMs2 = sendResult.parameters?.retry_after
+    if (!isUrlFailure) {
+      const waitMs1 = sendResult.parameters?.retry_after
         ? (sendResult.parameters.retry_after + 1) * 1000
-        : 4500;
-      console.warn(`Album batch retry 1 failed (${sendResult.description}). Waiting ${waitMs2}ms for retry 2...`);
-      await new Promise((r) => setTimeout(r, waitMs2));
+        : 3500;
+      console.warn(`Album batch of ${items.length} failed (${sendResult.description}). Waiting ${waitMs1}ms for retry 1...`);
+      await new Promise((r) => setTimeout(r, waitMs1));
       sendResult = await api.sendMediaGroup(chatId, items);
+
+      if (!sendResult.ok) {
+        const waitMs2 = sendResult.parameters?.retry_after
+          ? (sendResult.parameters.retry_after + 1) * 1000
+          : 4500;
+        console.warn(`Album batch retry 1 failed (${sendResult.description}). Waiting ${waitMs2}ms for retry 2...`);
+        await new Promise((r) => setTimeout(r, waitMs2));
+        sendResult = await api.sendMediaGroup(chatId, items);
+      }
     }
   }
 
@@ -1011,7 +1021,8 @@ async function sendBooruPostsToChat(
   mode = "top",
   source = "both",
   gelbooruAuth,
-  tagQuery
+  tagQuery,
+  workerOrigin
 ) {
   const modeLabel = mode === "random" ? "random" : "top";
   let loadingText = tagQuery
@@ -1119,13 +1130,19 @@ async function sendBooruPostsToChat(
     }
 
     const buildMediaGroup = (items) =>
-      items.map((post, idx) => ({
-        type: "photo",
-        media: post.imageUrl,
-        caption: formatPostCaption(post, idx, formattedDate, mode).slice(0, 1024),
-        parse_mode: "HTML",
-        has_spoiler: spoilerNsfw && post.isNsfw,
-      }));
+      items.map((post, idx) => {
+        let mediaUrl = post.imageUrl;
+        if (post.source === "gelbooru" && workerOrigin) {
+          mediaUrl = `${workerOrigin}/image.jpg?url=${encodeURIComponent(post.imageUrl)}`;
+        }
+        return {
+          type: "photo",
+          media: mediaUrl,
+          caption: formatPostCaption(post, idx, formattedDate, mode).slice(0, 1024),
+          parse_mode: "HTML",
+          has_spoiler: spoilerNsfw && post.isNsfw,
+        };
+      });
 
     const sendGroupBatches = async (items) => {
       let sent = 0;
@@ -1281,7 +1298,7 @@ const DEFAULT_BOT_COMMANDS = [
   { command: "help", description: "📖 Help & command reference" },
 ];
 
-async function handleTelegramMessage(message, env) {
+async function handleTelegramMessage(message, env, workerOrigin) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
   const from = message.from;
@@ -1402,7 +1419,8 @@ async function handleTelegramMessage(message, env) {
         "top",
         source,
         gelAuth,
-        tagQuery
+        tagQuery,
+        workerOrigin
       );
       break;
     }
@@ -1529,7 +1547,9 @@ async function handleTelegramMessage(message, env) {
         parsed.spoilerNsfw,
         "random",
         parsed.source || config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1545,7 +1565,9 @@ async function handleTelegramMessage(message, env) {
         parsed.spoilerNsfw,
         "top",
         "yandere",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1561,7 +1583,9 @@ async function handleTelegramMessage(message, env) {
         parsed.spoilerNsfw,
         "random",
         "gelbooru",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1576,7 +1600,9 @@ async function handleTelegramMessage(message, env) {
         parsed.spoilerNsfw,
         "top",
         "both",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1598,7 +1624,9 @@ async function handleTelegramMessage(message, env) {
         parsed.spoilerNsfw,
         "top",
         parsed.source || config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1660,7 +1688,7 @@ async function handleTelegramMessage(message, env) {
   }
 }
 
-async function handleTelegramCallbackQuery(callbackQuery, env) {
+async function handleTelegramCallbackQuery(callbackQuery, env, workerOrigin) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
   const msg = callbackQuery.message;
@@ -1709,7 +1737,8 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
       "top",
       targetSource,
       gelAuth,
-      tag
+      tag,
+      workerOrigin
     );
     return;
   }
@@ -1725,7 +1754,9 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
         config.spoilerNsfw,
         "top",
         config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1739,18 +1770,20 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
         config.spoilerNsfw,
         "random",
         config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
     case "fetch_sfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 SFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top", config.source, gelAuth);
+      await sendBooruPostsToChat(api, msg.chat.id, "sfw", 10, false, "top", config.source, gelAuth, undefined, workerOrigin);
       break;
     }
     case "fetch_nsfw": {
       await api.answerCallbackQuery(callbackQuery.id, "Fetching top 10 NSFW...");
-      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top", config.source, gelAuth);
+      await sendBooruPostsToChat(api, msg.chat.id, "nsfw", 10, config.spoilerNsfw, "top", config.source, gelAuth, undefined, workerOrigin);
       break;
     }
     case "fetch_yan": {
@@ -1763,7 +1796,9 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
         config.spoilerNsfw,
         config.mode,
         "yandere",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1777,7 +1812,9 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
         config.spoilerNsfw,
         "random",
         "gelbooru",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1791,7 +1828,9 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
         config.spoilerNsfw,
         config.mode,
         "both",
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin
       );
       break;
     }
@@ -1800,7 +1839,7 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
   }
 }
 
-async function handleScheduledBroadcast(env) {
+async function handleScheduledBroadcast(env, workerOrigin) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
   const config = getConfig(env);
@@ -1821,7 +1860,9 @@ async function handleScheduledBroadcast(env) {
         config.spoilerNsfw,
         config.mode,
         config.source,
-        gelAuth
+        gelAuth,
+        undefined,
+        workerOrigin || env.WORKER_URL
       );
       sentCount++;
     } catch (err) {
@@ -1964,6 +2005,37 @@ export default {
       );
     }
 
+    // Image proxy endpoint to bypass anti-hotlink protections (e.g. Gelbooru Referer requirement)
+    if (request.method === "GET" && (url.pathname === "/image.jpg" || url.pathname === "/image" || url.pathname === "/proxy")) {
+      const targetUrl = url.searchParams.get("url");
+      if (!targetUrl) return new Response("Missing url parameter", { status: 400 });
+
+      try {
+        const imageRes = await fetch(targetUrl, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Referer: "https://gelbooru.com/",
+          },
+        });
+
+        if (!imageRes.ok) {
+          return new Response(`Upstream error: ${imageRes.status}`, { status: imageRes.status });
+        }
+
+        const contentType = imageRes.headers.get("content-type") || "image/jpeg";
+        return new Response(imageRes.body, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=604800, immutable",
+          },
+        });
+      } catch (err) {
+        return new Response(`Proxy error: ${err.message}`, { status: 502 });
+      }
+    }
+
     if (request.method === "POST" && (url.pathname === "/webhook" || url.pathname === "/")) {
       if (env.SECRET_TOKEN) {
         const headerSecret = request.headers.get("x-telegram-bot-api-secret-token");
@@ -1972,10 +2044,11 @@ export default {
 
       try {
         const update = await request.json();
+        const workerOrigin = url.origin;
         if (update.message) {
-          ctx.waitUntil(handleTelegramMessage(update.message, env));
+          ctx.waitUntil(handleTelegramMessage(update.message, env, workerOrigin));
         } else if (update.callback_query) {
-          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env));
+          ctx.waitUntil(handleTelegramCallbackQuery(update.callback_query, env, workerOrigin));
         } else if (update.inline_query) {
           ctx.waitUntil(handleTelegramInlineQuery(update.inline_query, env));
         }

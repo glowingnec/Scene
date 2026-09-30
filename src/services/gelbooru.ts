@@ -119,8 +119,13 @@ export async function fetchGelbooruPosts(
       if (ratingFilter === "sfw" && isNsfw) continue;
       if (ratingFilter === "nsfw" && !isNsfw) continue;
 
-      const imageUrl = post.sample_url || post.file_url;
+      let imageUrl = post.sample_url || post.file_url;
+      if (!imageUrl && post.directory && post.image) {
+        imageUrl = `https://img3.gelbooru.com/images/${post.directory}/${post.image}`;
+      }
       if (!imageUrl) continue;
+      if (imageUrl.startsWith("//")) imageUrl = `https:${imageUrl}`;
+      if (imageUrl.startsWith("http://")) imageUrl = imageUrl.replace(/^http:\/\//i, "https://");
 
       // Ignore video formats
       const lowerImg = imageUrl.toLowerCase();
