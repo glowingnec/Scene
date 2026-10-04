@@ -5,12 +5,9 @@ import { getConfig } from "../config";
 export const SETTINGS_HEADER = "⚙️ <b>Settings</b>";
 
 /**
- * Builds clean, minimal settings text and interactive toggle buttons.
+ * Builds the text for the dedicated pinned config file message.
  */
-export function buildSettingsMessage(settings: BotSettings): {
-  text: string;
-  replyMarkup: InlineKeyboardMarkup;
-} {
+export function buildConfigFileText(settings: BotSettings): string {
   const modeLabel = settings.mode === "random" ? "Random" : "Top";
   const ratingLabel =
     settings.rating === "sfw"
@@ -20,12 +17,23 @@ export function buildSettingsMessage(settings: BotSettings): {
       : "All";
   const spoilerLabel = settings.spoilerNsfw ? "On" : "Off";
 
-  const text =
+  return (
     `${SETTINGS_HEADER}\n\n` +
     `• Mode: <b>${modeLabel}</b>\n` +
     `• Rating: <b>${ratingLabel}</b>\n` +
     `• Limit: <b>${settings.limit}</b>\n` +
-    `• Spoilers: <b>${spoilerLabel}</b>`;
+    `• Spoilers: <b>${spoilerLabel}</b>`
+  );
+}
+
+/**
+ * Builds the interactive settings menu message and inline buttons.
+ */
+export function buildSettingsMessage(settings: BotSettings): {
+  text: string;
+  replyMarkup: InlineKeyboardMarkup;
+} {
+  const text = buildConfigFileText(settings);
 
   const isTop = settings.mode !== "random";
   const isSfw = settings.rating === "sfw";
@@ -101,7 +109,7 @@ export function buildSettingsMessage(settings: BotSettings): {
 }
 
 /**
- * Parses settings from the message text, supporting bullet points or JSON block.
+ * Parses settings from message text (bullet points or optional JSON).
  */
 export function parseSettingsText(text: string, fallback: BotSettings): BotSettings {
   if (!text) return fallback;
@@ -171,7 +179,7 @@ export function parseSettingsText(text: string, fallback: BotSettings): BotSetti
 }
 
 /**
- * Reads dynamic settings from Telegram pinned message in owner's chat.
+ * Reads settings from the dedicated pinned config message in the chat.
  * Falls back cleanly to env variables if not found or unpinned.
  */
 export async function fetchChatSettings(
@@ -201,35 +209,43 @@ export async function fetchChatSettings(
 }
 
 /**
- * Ensures the settings card exists and is pinned in chat.
+ * Ensures the dedicated pinned config file message exists in chat.
+ * Pins it ONLY ONCE upon initial creation. Never repins if it already exists.
  */
-export async function ensurePinnedSettings(
+export async function ensureConfigFileExists(
   api: TelegramApi,
   chatId: number | string,
   env: Env
-): Promise<{ messageId: number; settings: BotSettings }> {
+): Promise<{ settings: BotSettings; pinnedMessageId?: number }> {
   const { settings, pinnedMessageId } = await fetchChatSettings(api, chatId, env);
-  const { text, replyMarkup } = buildSettingsMessage(settings);
 
-  // Send a fresh settings card directly in chat so user immediately sees it
-  const sendRes = await api.sendMessage(chatId, text, { reply_markup: replyMarkup });
-  const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : null;
-
-  if (newMsgId) {
-    // Pin the new settings card silently
-    await api.pinChatMessage(chatId, newMsgId, { disable_notification: true });
-
-    // Clean up previous pinned settings message if it exists
-    if (pinnedMessageId && pinnedMessageId !== newMsgId) {
-      try {
-        await api.deleteMessage(chatId, pinnedMessageId);
-      } catch (e) {
-        // Ignore deletion errors for old messages
-      }
-    }
-
-    return { messageId: newMsgId, settings };
+  // If already pinned, leave it alone! Do not repin.
+  if (pinnedMessageId) {
+    return { settings, pinnedMessageId };
   }
 
-  return { messageId: 0, settings };
+  // Not yet created/pinned: send text config and pin it once silently
+  const fileText = buildConfigFileText(settings);
+  const sendRes = await api.sendMessage(chatId, fileText);
+  const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : undefined;
+
+  if (newMsgId) {
+    await api.pinChatMessage(chatId, newMsgId, { disable_notification: true });
+    return { settings, pinnedMessageId: newMsgId };
+  }
+
+  return { settings };
+}
+
+/**
+ * Silently updates the content of the pinned config file in chat when settings change.
+ */
+export async function updateConfigFile(
+  api: TelegramApi,
+  chatId: number | string,
+  pinnedMessageId: number,
+  settings: BotSettings
+): Promise<void> {
+  const text = buildConfigFileText(settings);
+  await api.editMessageText(chatId, pinnedMessageId, text);
 }

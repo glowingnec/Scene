@@ -80,7 +80,7 @@ function escapeHtml(str) {
 
 const SETTINGS_HEADER = "⚙️ <b>Settings</b>";
 
-function buildSettingsMessage(settings) {
+function buildConfigFileText(settings) {
   const modeLabel = settings.mode === "random" ? "Random" : "Top";
   const ratingLabel =
     settings.rating === "sfw"
@@ -90,12 +90,17 @@ function buildSettingsMessage(settings) {
       : "All";
   const spoilerLabel = settings.spoilerNsfw ? "On" : "Off";
 
-  const text =
+  return (
     `${SETTINGS_HEADER}\n\n` +
     `• Mode: <b>${modeLabel}</b>\n` +
     `• Rating: <b>${ratingLabel}</b>\n` +
     `• Limit: <b>${settings.limit}</b>\n` +
-    `• Spoilers: <b>${spoilerLabel}</b>`;
+    `• Spoilers: <b>${spoilerLabel}</b>`
+  );
+}
+
+function buildSettingsMessage(settings) {
+  const text = buildConfigFileText(settings);
 
   const isTop = settings.mode !== "random";
   const isSfw = settings.rating === "sfw";
@@ -257,28 +262,29 @@ async function fetchChatSettings(api, ownerChatId, env) {
   return { settings: fallback };
 }
 
-async function ensurePinnedSettings(api, chatId, env) {
+async function ensureConfigFileExists(api, chatId, env) {
   const { settings, pinnedMessageId } = await fetchChatSettings(api, chatId, env);
-  const { text, replyMarkup } = buildSettingsMessage(settings);
 
-  const sendRes = await api.sendMessage(chatId, text, { reply_markup: replyMarkup });
-  const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : null;
+  // If already pinned, do not repin!
+  if (pinnedMessageId) {
+    return { settings, pinnedMessageId };
+  }
+
+  const fileText = buildConfigFileText(settings);
+  const sendRes = await api.sendMessage(chatId, fileText);
+  const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : undefined;
 
   if (newMsgId) {
     await api.pinChatMessage(chatId, newMsgId, { disable_notification: true });
-
-    if (pinnedMessageId && pinnedMessageId !== newMsgId) {
-      try {
-        await api.deleteMessage(chatId, pinnedMessageId);
-      } catch (e) {
-        // Ignore deletion errors for old messages
-      }
-    }
-
-    return { messageId: newMsgId, settings };
+    return { settings, pinnedMessageId: newMsgId };
   }
 
-  return { messageId: 0, settings };
+  return { settings };
+}
+
+async function updateConfigFile(api, chatId, pinnedMessageId, settings) {
+  const text = buildConfigFileText(settings);
+  await api.editMessageText(chatId, pinnedMessageId, text);
 }
 
 function getTagTypeLabel(type) {
@@ -1357,7 +1363,9 @@ async function handleTelegramMessage(message, env) {
     case "/config": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
       await api.setChatMenuButton({ type: "commands" });
-      await ensurePinnedSettings(api, chat.id, env);
+      const { settings } = await ensureConfigFileExists(api, chat.id, env);
+      const { text: menuText, replyMarkup } = buildSettingsMessage(settings);
+      await api.sendMessage(chat.id, menuText, { reply_markup: replyMarkup });
       break;
     }
 
@@ -1415,6 +1423,13 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
 
     const { text: newText, replyMarkup: newMarkup } = buildSettingsMessage(currentSettings);
     await api.editMessageText(msg.chat.id, msg.message_id, newText, { reply_markup: newMarkup });
+
+    // Silently update the pinned config file message if different from this message
+    const { pinnedMessageId } = await fetchChatSettings(api, msg.chat.id, env);
+    if (pinnedMessageId && pinnedMessageId !== msg.message_id) {
+      await updateConfigFile(api, msg.chat.id, pinnedMessageId, currentSettings);
+    }
+
     await api.answerCallbackQuery(callbackQuery.id, "Saved");
     return;
   }

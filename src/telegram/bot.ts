@@ -21,7 +21,8 @@ import {
   fetchChatSettings,
   buildSettingsMessage,
   parseSettingsText,
-  ensurePinnedSettings,
+  ensureConfigFileExists,
+  updateConfigFile,
 } from "../services/chatConfig";
 
 /**
@@ -641,7 +642,9 @@ export async function handleTelegramMessage(
     case "/config": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
       await api.setChatMenuButton({ type: "commands" });
-      await ensurePinnedSettings(api, chat.id, env);
+      const { settings } = await ensureConfigFileExists(api, chat.id, env);
+      const { text: menuText, replyMarkup } = buildSettingsMessage(settings);
+      await api.sendMessage(chat.id, menuText, { reply_markup: replyMarkup });
       break;
     }
 
@@ -705,6 +708,13 @@ export async function handleTelegramCallbackQuery(
 
     const { text: newText, replyMarkup: newMarkup } = buildSettingsMessage(currentSettings);
     await api.editMessageText(msg.chat.id, msg.message_id, newText, { reply_markup: newMarkup });
+
+    // Silently update the pinned config file message if different from this message
+    const { pinnedMessageId } = await fetchChatSettings(api, msg.chat.id, env);
+    if (pinnedMessageId && pinnedMessageId !== msg.message_id) {
+      await updateConfigFile(api, msg.chat.id, pinnedMessageId, currentSettings);
+    }
+
     await api.answerCallbackQuery(callbackQuery.id, "Saved");
     return;
   }
