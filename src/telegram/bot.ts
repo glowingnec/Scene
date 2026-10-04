@@ -495,6 +495,11 @@ export async function handleTelegramMessage(
   const chat = message.chat;
   const text = (message.text || "").trim();
 
+  // Ignore service messages (e.g. pinned message notification), non-text updates, and messages from bots
+  if (!text || from?.is_bot || (message as any).pinned_message) {
+    return;
+  }
+
   // Strict owner restriction: only @cheytac29 / 1368225736
   if (!isOwner(from, env)) {
     await api.sendMessage(chat.id, "Access Denied: You don't have permission");
