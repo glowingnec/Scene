@@ -222,5 +222,58 @@ export class TelegramApi {
       return { ok: false, description: err?.message || "Network request failed" };
     }
   }
+
+  async getChat(chatId: number | string): Promise<TelegramApiResponse<any>> {
+    try {
+      const res = await fetch(`${this.baseUrl}/getChat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
+
+  async pinChatMessage(
+    chatId: number | string,
+    messageId: number,
+    options?: { disable_notification?: boolean }
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/pinChatMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          disable_notification: options?.disable_notification ?? true,
+        }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
+
+  async unpinChatMessage(
+    chatId: number | string,
+    messageId?: number
+  ): Promise<TelegramApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/unpinChatMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+        }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { ok: false, description: err?.message || "Network request failed" };
+    }
+  }
 }
 

@@ -78,28 +78,203 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-function getRatingBadgeText(rating) {
-  if (rating === "sfw") return "SFW Mode 🛡️";
-  if (rating === "nsfw") return "NSFW Mode ⚠️";
-  return "Both SFW+NSFW 🌈";
+const SETTINGS_HEADER = "⚙️ <b>Settings</b>";
+
+function buildSettingsMessage(settings) {
+  const modeLabel = settings.mode === "random" ? "Random" : "Top";
+  const ratingLabel =
+    settings.rating === "sfw"
+      ? "SFW"
+      : settings.rating === "nsfw"
+      ? "NSFW"
+      : "All";
+  const spoilerLabel = settings.spoilerNsfw ? "On" : "Off";
+
+  const text =
+    `${SETTINGS_HEADER}\n\n` +
+    `• Mode: <b>${modeLabel}</b>\n` +
+    `• Rating: <b>${ratingLabel}</b>\n` +
+    `• Limit: <b>${settings.limit}</b>\n` +
+    `• Spoilers: <b>${spoilerLabel}</b>`;
+
+  const isTop = settings.mode !== "random";
+  const isSfw = settings.rating === "sfw";
+  const isNsfw = settings.rating === "nsfw";
+  const isAll = settings.rating === "all";
+
+  const is10 = settings.limit === 10;
+  const is20 = settings.limit === 20;
+  const is30 = settings.limit === 30 || (!is10 && !is20);
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        {
+          text: isTop ? "✅ Top" : "🌟 Top",
+          callback_data: "cfg:mode:top",
+        },
+        {
+          text: !isTop ? "✅ Random" : "🎲 Random",
+          callback_data: "cfg:mode:random",
+        },
+      ],
+      [
+        {
+          text: isSfw ? "✅ SFW" : "🛡️ SFW",
+          callback_data: "cfg:rating:sfw",
+        },
+        {
+          text: isNsfw ? "✅ NSFW" : "⚠️ NSFW",
+          callback_data: "cfg:rating:nsfw",
+        },
+        {
+          text: isAll ? "✅ All" : "🌈 All",
+          callback_data: "cfg:rating:all",
+        },
+      ],
+      [
+        {
+          text: is10 ? "✅ 10" : "10",
+          callback_data: "cfg:limit:10",
+        },
+        {
+          text: is20 ? "✅ 20" : "20",
+          callback_data: "cfg:limit:20",
+        },
+        {
+          text: is30 ? "✅ 30" : "30",
+          callback_data: "cfg:limit:30",
+        },
+      ],
+      [
+        {
+          text: settings.spoilerNsfw
+            ? "🙈 Spoilers: On (Blurred)"
+            : "👁️ Spoilers: Off (Unblurred)",
+          callback_data: "cfg:spoiler:toggle",
+        },
+      ],
+      [
+        {
+          text: "🔍 Search Tag",
+          switch_inline_query_current_chat: "",
+        },
+        {
+          text: "🚀 Fetch Now",
+          callback_data: "fetch_top",
+        },
+      ],
+    ],
+  };
+
+  return { text, replyMarkup };
 }
 
-function formatSettingsText(config) {
-  const spoilerText = config.spoilerNsfw ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
-  const targetText = config.ownerChatId ? `<code>${config.ownerChatId}</code>` : "<code>1368225736</code>";
-  const modeText = config.mode === "random" ? "Random Images 🎲" : "Top Popular Today 🌟";
+function parseSettingsText(text, fallback) {
+  if (!text) return fallback;
 
-  return (
-    `⚙️ <b>Active Bot Configuration</b>\n\n` +
-    `• <b>Source:</b> <code>yande.re 🌸</code>\n` +
-    `• <b>Delivery Mode:</b> <code>${modeText}</code>\n` +
-    `• <b>Default Rating:</b> <code>${getRatingBadgeText(config.rating)}</code>\n` +
-    `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
-    `• <b>Everyday Count:</b> <code>${config.limit} images</code>\n` +
-    `• <b>Delivery Target:</b> ${targetText}\n` +
-    `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables).</i>`
-  );
+  const jsonMatch = text.match(/\{[\s\S]*"mode"[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        ...fallback,
+        mode: parsed.mode === "random" ? "random" : "top",
+        rating:
+          parsed.rating === "sfw"
+            ? "sfw"
+            : parsed.rating === "nsfw"
+            ? "nsfw"
+            : "all",
+        limit:
+          typeof parsed.limit === "number" && parsed.limit > 0 && parsed.limit <= 50
+            ? parsed.limit
+            : fallback.limit,
+        spoilerNsfw: Boolean(parsed.spoilerNsfw ?? parsed.spoiler),
+      };
+    } catch {
+      // Fall through to bullet-point regex
+    }
+  }
+
+  let mode = fallback.mode;
+  let rating = fallback.rating;
+  let limit = fallback.limit;
+  let spoilerNsfw = fallback.spoilerNsfw;
+
+  const modeMatch = text.match(/Mode:\s*(?:<b>)?(Top|Random)(?:<\/b>)?/i);
+  if (modeMatch) {
+    mode = modeMatch[1].toLowerCase() === "random" ? "random" : "top";
+  }
+
+  const ratingMatch = text.match(/Rating:\s*(?:<b>)?(All|SFW|NSFW)(?:<\/b>)?/i);
+  if (ratingMatch) {
+    const r = ratingMatch[1].toLowerCase();
+    rating = r === "sfw" ? "sfw" : r === "nsfw" ? "nsfw" : "all";
+  }
+
+  const limitMatch = text.match(/Limit:\s*(?:<b>)?(\d+)(?:<\/b>)?/i);
+  if (limitMatch) {
+    const n = parseInt(limitMatch[1], 10);
+    if (!isNaN(n) && n > 0 && n <= 50) {
+      limit = n;
+    }
+  }
+
+  const spoilerMatch = text.match(/Spoilers?:\s*(?:<b>)?(On|Off)(?:<\/b>)?/i);
+  if (spoilerMatch) {
+    spoilerNsfw = spoilerMatch[1].toLowerCase() === "on";
+  }
+
+  return {
+    ...fallback,
+    mode,
+    rating,
+    limit,
+    spoilerNsfw,
+  };
+}
+
+async function fetchChatSettings(api, ownerChatId, env) {
+  const fallback = getConfig(env);
+  if (!ownerChatId) return { settings: fallback };
+
+  try {
+    const chatRes = await api.getChat(ownerChatId);
+    if (chatRes.ok && chatRes.result?.pinned_message) {
+      const pinnedMsg = chatRes.result.pinned_message;
+      const text = pinnedMsg.text || "";
+
+      if (text.includes("Settings") || text.includes("⚙️")) {
+        const parsed = parseSettingsText(text, fallback);
+        return { settings: parsed, pinnedMessageId: pinnedMsg.message_id };
+      }
+    }
+  } catch (err) {
+    console.warn("fetchChatSettings failed, using env defaults:", err);
+  }
+
+  return { settings: fallback };
+}
+
+async function ensurePinnedSettings(api, chatId, env) {
+  const { settings, pinnedMessageId } = await fetchChatSettings(api, chatId, env);
+  const { text, replyMarkup } = buildSettingsMessage(settings);
+
+  if (pinnedMessageId) {
+    await api.editMessageText(chatId, pinnedMessageId, text, { reply_markup: replyMarkup });
+    return { messageId: pinnedMessageId, settings };
+  }
+
+  const sendRes = await api.sendMessage(chatId, text, { reply_markup: replyMarkup });
+  const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : null;
+
+  if (newMsgId) {
+    await api.pinChatMessage(chatId, newMsgId, { disable_notification: true });
+    return { messageId: newMsgId, settings };
+  }
+
+  return { messageId: 0, settings };
 }
 
 function getTagTypeLabel(type) {
@@ -588,6 +763,52 @@ class TelegramApi {
       return { ok: false, description: err.message || "Network request failed" };
     }
   }
+
+  async getChat(chatId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/getChat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err.message || "Network request failed" };
+    }
+  }
+
+  async pinChatMessage(chatId, messageId, options) {
+    try {
+      const res = await fetch(`${this.baseUrl}/pinChatMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          disable_notification: options?.disable_notification ?? true,
+        }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err.message || "Network request failed" };
+    }
+  }
+
+  async unpinChatMessage(chatId, messageId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/unpinChatMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+        }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err.message || "Network request failed" };
+    }
+  }
 }
 
 async function sendAlbumBatch(api, chatId, items) {
@@ -995,7 +1216,7 @@ async function handleTelegramMessage(message, env) {
 
   const [command, ...args] = text.split(/\s+/);
   const cmd = command.toLowerCase().replace(/@.+$/, "");
-  const config = getConfig(env);
+  const { settings: config } = await fetchChatSettings(api, chat.id, env);
 
   switch (cmd) {
     case "/start": {
@@ -1127,26 +1348,7 @@ async function handleTelegramMessage(message, env) {
     case "/config": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
       await api.setChatMenuButton({ type: "commands" });
-      await api.sendMessage(chat.id, formatSettingsText(config), {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🔍 Search Tag (Live Autocomplete)",
-                switch_inline_query_current_chat: "",
-              },
-            ],
-            [
-              { text: `🚀 Top ${config.limit}`, callback_data: "fetch_top" },
-              { text: `🎲 Random ${config.limit}`, callback_data: "fetch_random" },
-            ],
-            [
-              { text: "🛡️ Top 10 SFW", callback_data: "fetch_sfw" },
-              { text: "⚠️ Top 10 NSFW", callback_data: "fetch_nsfw" },
-            ],
-          ],
-        },
-      });
+      await ensurePinnedSettings(api, chat.id, env);
       break;
     }
 
@@ -1184,7 +1386,29 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
     return;
   }
 
-  const config = getConfig(env);
+  const { settings: config } = await fetchChatSettings(api, msg.chat.id, env);
+
+  if (callbackQuery.data && callbackQuery.data.startsWith("cfg:")) {
+    const rawAction = callbackQuery.data.slice(4);
+    const currentSettings = parseSettingsText(msg.text || "", config);
+
+    if (rawAction.startsWith("mode:")) {
+      currentSettings.mode = rawAction.slice(5) === "random" ? "random" : "top";
+    } else if (rawAction.startsWith("rating:")) {
+      const r = rawAction.slice(7);
+      currentSettings.rating = r === "sfw" ? "sfw" : r === "nsfw" ? "nsfw" : "all";
+    } else if (rawAction.startsWith("limit:")) {
+      const l = parseInt(rawAction.slice(6), 10);
+      if (!isNaN(l)) currentSettings.limit = l;
+    } else if (rawAction === "spoiler:toggle") {
+      currentSettings.spoilerNsfw = !currentSettings.spoilerNsfw;
+    }
+
+    const { text: newText, replyMarkup: newMarkup } = buildSettingsMessage(currentSettings);
+    await api.editMessageText(msg.chat.id, msg.message_id, newText, { reply_markup: newMarkup });
+    await api.answerCallbackQuery(callbackQuery.id, "Saved");
+    return;
+  }
 
   if (
     callbackQuery.data &&
@@ -1255,7 +1479,12 @@ async function handleTelegramCallbackQuery(callbackQuery, env) {
 async function handleScheduledBroadcast(env) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
-  const config = getConfig(env);
+  const fallback = getConfig(env);
+  const { settings: config } = await fetchChatSettings(
+    api,
+    fallback.ownerChatId || DEFAULT_CONFIG.OWNER_CHAT_ID,
+    env
+  );
 
   const targets = new Set();
   if (config.ownerChatId) targets.add(config.ownerChatId);
@@ -1457,4 +1686,4 @@ export default {
       console.error("Daily cron broadcast failed:", err);
     }
   },
-};
+};\n

@@ -17,6 +17,12 @@ import { TelegramApi } from "./api";
 import { getConfig, DEFAULT_CONFIG } from "../config";
 import { fetchBooruPosts } from "../services/booru";
 import { searchBooruTags, getTagTypeEmoji, getTagTypeLabel } from "../services/tags";
+import {
+  fetchChatSettings,
+  buildSettingsMessage,
+  parseSettingsText,
+  ensurePinnedSettings,
+} from "../services/chatConfig";
 
 /**
  * Strict owner verification.
@@ -41,38 +47,6 @@ function escapeHtml(text?: string | number): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function getRatingBadgeText(rating: RatingFilter): string {
-  switch (rating) {
-    case "sfw":
-      return "SFW (Safe only) 🛡️";
-    case "nsfw":
-      return "NSFW (Questionable / Explicit) ⚠️";
-    case "all":
-      return "Both (SFW + NSFW) 🌈";
-  }
-}
-
-/**
- * Format settings overview text based on active Cloudflare environment variables
- */
-function formatSettingsText(config: BotSettings): string {
-  const spoilerText = config.spoilerNsfw ? "Enabled (Blurred) 🙈" : "Disabled (Unblurred) 👁️";
-  const targetText = config.ownerChatId ? `<code>${config.ownerChatId}</code>` : "<code>1368225736</code>";
-  const modeText = config.mode === "random" ? "Random Images 🎲" : "Top Popular Today 🌟";
-
-  return (
-    `⚙️ <b>Active Bot Configuration</b>\n\n` +
-    `• <b>Source:</b> <code>yande.re 🌸</code>\n` +
-    `• <b>Delivery Mode:</b> <code>${modeText}</code>\n` +
-    `• <b>Default Rating:</b> <code>${getRatingBadgeText(config.rating)}</code>\n` +
-    `• <b>NSFW Spoilers:</b> <code>${spoilerText}</code>\n` +
-    `• <b>Everyday Count:</b> <code>${config.limit} images</code>\n` +
-    `• <b>Delivery Target:</b> ${targetText}\n` +
-    `• <b>Daily Schedule:</b> <code>8:00 AM UTC+7 (01:00 UTC)</code>\n\n` +
-    `💡 <i>To permanently change defaults, edit runtime variables in your Cloudflare Dashboard (Settings ➔ Variables).</i>`
-  );
 }
 
 /**
@@ -529,7 +503,7 @@ export async function handleTelegramMessage(
 
   const [command, ...args] = text.split(/\s+/);
   const cmd = command.toLowerCase().replace(/@.+$/, "");
-  const config = getConfig(env);
+  const { settings: config } = await fetchChatSettings(api, chat.id, env);
 
   switch (cmd) {
     case "/start": {
@@ -662,26 +636,7 @@ export async function handleTelegramMessage(
     case "/config": {
       await api.setMyCommands(DEFAULT_BOT_COMMANDS);
       await api.setChatMenuButton({ type: "commands" });
-      await api.sendMessage(chat.id, formatSettingsText(config), {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🔍 Search Tag (Live Autocomplete)",
-                switch_inline_query_current_chat: "",
-              },
-            ],
-            [
-              { text: `🚀 Top ${config.limit}`, callback_data: "fetch_top" },
-              { text: `🎲 Random ${config.limit}`, callback_data: "fetch_random" },
-            ],
-            [
-              { text: "🛡️ Top 10 SFW", callback_data: "fetch_sfw" },
-              { text: "⚠️ Top 10 NSFW", callback_data: "fetch_nsfw" },
-            ],
-          ],
-        },
-      });
+      await ensurePinnedSettings(api, chat.id, env);
       break;
     }
 
@@ -725,7 +680,29 @@ export async function handleTelegramCallbackQuery(
     return;
   }
 
-  const config = getConfig(env);
+  const { settings: config } = await fetchChatSettings(api, msg.chat.id, env);
+
+  if (callbackQuery.data && callbackQuery.data.startsWith("cfg:")) {
+    const rawAction = callbackQuery.data.slice(4);
+    const currentSettings = parseSettingsText(msg.text || "", config);
+
+    if (rawAction.startsWith("mode:")) {
+      currentSettings.mode = rawAction.slice(5) === "random" ? "random" : "top";
+    } else if (rawAction.startsWith("rating:")) {
+      const r = rawAction.slice(7);
+      currentSettings.rating = r === "sfw" ? "sfw" : r === "nsfw" ? "nsfw" : "all";
+    } else if (rawAction.startsWith("limit:")) {
+      const l = parseInt(rawAction.slice(6), 10);
+      if (!isNaN(l)) currentSettings.limit = l;
+    } else if (rawAction === "spoiler:toggle") {
+      currentSettings.spoilerNsfw = !currentSettings.spoilerNsfw;
+    }
+
+    const { text: newText, replyMarkup: newMarkup } = buildSettingsMessage(currentSettings);
+    await api.editMessageText(msg.chat.id, msg.message_id, newText, { reply_markup: newMarkup });
+    await api.answerCallbackQuery(callbackQuery.id, "Saved");
+    return;
+  }
 
   if (
     callbackQuery.data &&
@@ -800,7 +777,12 @@ export async function handleTelegramCallbackQuery(
 export async function handleScheduledBroadcast(env: Env): Promise<string> {
   const token = env.TELEGRAM_BOT_TOKEN;
   const api = new TelegramApi(token);
-  const config = getConfig(env);
+  const fallback = getConfig(env);
+  const { settings: config } = await fetchChatSettings(
+    api,
+    fallback.ownerChatId || DEFAULT_CONFIG.OWNER_CHAT_ID,
+    env
+  );
 
   const targets = new Set<number | string>();
   if (config.ownerChatId) targets.add(config.ownerChatId);
