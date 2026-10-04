@@ -261,16 +261,20 @@ async function ensurePinnedSettings(api, chatId, env) {
   const { settings, pinnedMessageId } = await fetchChatSettings(api, chatId, env);
   const { text, replyMarkup } = buildSettingsMessage(settings);
 
-  if (pinnedMessageId) {
-    await api.editMessageText(chatId, pinnedMessageId, text, { reply_markup: replyMarkup });
-    return { messageId: pinnedMessageId, settings };
-  }
-
   const sendRes = await api.sendMessage(chatId, text, { reply_markup: replyMarkup });
   const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : null;
 
   if (newMsgId) {
     await api.pinChatMessage(chatId, newMsgId, { disable_notification: true });
+
+    if (pinnedMessageId && pinnedMessageId !== newMsgId) {
+      try {
+        await api.deleteMessage(chatId, pinnedMessageId);
+      } catch (e) {
+        // Ignore deletion errors for old messages
+      }
+    }
+
     return { messageId: newMsgId, settings };
   }
 

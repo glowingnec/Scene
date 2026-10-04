@@ -211,18 +211,23 @@ export async function ensurePinnedSettings(
   const { settings, pinnedMessageId } = await fetchChatSettings(api, chatId, env);
   const { text, replyMarkup } = buildSettingsMessage(settings);
 
-  if (pinnedMessageId) {
-    // Refresh existing pinned message
-    await api.editMessageText(chatId, pinnedMessageId, text, { reply_markup: replyMarkup });
-    return { messageId: pinnedMessageId, settings };
-  }
-
-  // Send new message and pin it silently
+  // Send a fresh settings card directly in chat so user immediately sees it
   const sendRes = await api.sendMessage(chatId, text, { reply_markup: replyMarkup });
   const newMsgId = sendRes.ok && sendRes.result?.message_id ? sendRes.result.message_id : null;
 
   if (newMsgId) {
+    // Pin the new settings card silently
     await api.pinChatMessage(chatId, newMsgId, { disable_notification: true });
+
+    // Clean up previous pinned settings message if it exists
+    if (pinnedMessageId && pinnedMessageId !== newMsgId) {
+      try {
+        await api.deleteMessage(chatId, pinnedMessageId);
+      } catch (e) {
+        // Ignore deletion errors for old messages
+      }
+    }
+
     return { messageId: newMsgId, settings };
   }
 
